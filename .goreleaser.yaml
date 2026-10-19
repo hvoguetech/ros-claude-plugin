@@ -1,0 +1,83 @@
+# Release config for the ros-local helper CLI (spec §13a).
+#
+# A `v<semver>` tag runs .github/workflows/release.yml, which runs this. It produces static binaries for
+# macOS and Linux (amd64 + arm64), a SHA-256 `checksums.txt`, a keyless cosign signature bundle for the
+# checksums (GitHub OIDC), and the `ros-local` formula in the hvoguetech/homebrew-tap repository.
+#
+# Dry run locally: goreleaser release --snapshot --clean --skip=sign,publish
+version: 2
+
+project_name: ros-local
+
+builds:
+  - id: ros-local
+    dir: cli
+    main: .
+    binary: ros-local
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: ros-local
+    formats: [tar.gz]
+    name_template: "ros-local_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+signs:
+  # Keyless: the certificate in the bundle names this repository's release workflow.
+  # Verify with:
+  #   cosign verify-blob --bundle checksums.txt.sigstore.json \
+  #     --certificate-identity-regexp '^https://github.com/hvoguetech/ros-claude-plugin/\.github/workflows/release\.yml@' \
+  #     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+  - id: cosign
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+
+brews:
+  - name: ros-local
+    repository:
+      owner: hvoguetech
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/hvoguetech/ros-claude-plugin
+    description: Helper CLI for the ROS Claude Code plugin (sign-in, skills sync, hooks)
+    commit_author:
+      name: ros-release-bot
+      email: ros-release-bot@users.noreply.github.com
+    install: |
+      bin.install "ros-local"
+    test: |
+      assert_match "ros-local", shell_output("#{bin}/ros-local version")
+
+release:
+  github:
+    owner: hvoguetech
+    name: ros-claude-plugin
+  draft: false
+  prerelease: auto
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
