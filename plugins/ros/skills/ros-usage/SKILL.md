@@ -1,6 +1,6 @@
 ---
 name: ros-usage
-description: How to use ROS (the team's agent platform) from this session — its recalled memory, the ros MCP tools (recall_memory, remember, ask_team_memory, search_knowledge_base, search_past_runs) and the synced ros-* skills. Use when the user mentions ROS, team or project memory, past runs, or asks you to remember something for later.
+description: How to use ROS (the team's agent platform) from this session — its recalled memory, the ros MCP tools (recall_memory, remember, ask_team_memory, recall_knowledge, search_knowledge_base, search_past_runs) and the synced ros-* skills. Use when the user mentions ROS, team or project memory, past runs, or asks you to remember something for later.
 ---
 
 # Using ROS in a local session
@@ -26,6 +26,7 @@ the synced skills.
 | `recall_memory(query)` | Look up the user's and the project's memory beyond what was recalled at start. |
 | `ask_team_memory(question)` | Ask a question answered from the team's shared knowledge. |
 | `search_knowledge_base(query)` | Search the project's knowledge base documents. |
+| `recall_knowledge(query)` | Look up team knowledge: facts people or agents saved in the project (past decisions, conventions, names). |
 | `search_past_runs(query)`, `get_past_run(run_id)` | Find how a similar task went before (devbox runs, workflows, local sessions). |
 | `search_past_chats(query)` | Find earlier ROS chats about a topic. |
 | `memory_view`, `memory_append` | Read or add to the user's personal memory blocks. |
@@ -34,7 +35,9 @@ the synced skills.
 Guidelines:
 
 - **Project.** The tools act on the project named in the status line. Pass `project="<id>"` (the id from
-  the status line) only if a call needs a different project or a tool asks for it.
+  the status line) only if a call needs a different project or a tool asks for it. An unknown project is
+  an error, never a silent fallback: if a call fails on the project, tell the user rather than guessing.
+- **Available tools depend on sign-in scopes.** If a tool above isn't listed, the device wasn't granted it.
 - **Remember sparingly.** Save decisions, conventions and gotchas that will matter in a later session,
   not a log of this one. Ask before saving anything about a person, and never save secrets, tokens or
   customer data.

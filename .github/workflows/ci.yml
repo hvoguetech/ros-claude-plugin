@@ -48,7 +48,9 @@ jobs:
       - name: repo-specific checks
         run: python3 scripts/check_plugin.py
       - name: shellcheck
-        run: shellcheck plugins/ros/bin/ros-local install.sh
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck plugins/ros/bin/ros-local install.sh
 
   goreleaser:
     name: release config
