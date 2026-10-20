@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: ros-local (go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race -count=1 ./...
+      - name: static builds (macOS + Linux, amd64 + arm64)
+        run: |
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -o /dev/null .
+          done
+
+  plugin:
+    name: plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: claude plugin validate (marketplace + plugin)
+        run: |
+          npx -y @anthropic-ai/claude-code@2.1.303 plugin validate --strict .
+          npx -y @anthropic-ai/claude-code@2.1.303 plugin validate --strict plugins/ros
+      - name: repo-specific checks
+        run: python3 scripts/check_plugin.py
+      - name: shellcheck
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck plugins/ros/bin/ros-local install.sh
+
+  goreleaser:
+    name: release config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

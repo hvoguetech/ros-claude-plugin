@@ -1,0 +1,56 @@
+#!/bin/sh
+# Launcher for the ros-local helper CLI, used by the plugin's hooks and MCP headersHelper.
+#
+# It only looks for an ros-local binary that is already installed (Homebrew, install.sh, or
+# $ROS_LOCAL_BIN). It never downloads or installs anything: fetching binaries from inside a hook is a
+# supply-chain risk (spec §13a). If none is found, hooks get install instructions and exit 0, so a
+# session always starts.
+
+hint="ROS: ros-local isn't installed — run \`brew install hvoguetech/tap/ros-local\` (or see https://github.com/hvoguetech/ros-claude-plugin#install), then \`ros-local login\`"
+
+self_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)
+
+find_ros_local() {
+	if [ -n "${ROS_LOCAL_BIN:-}" ] && [ -x "$ROS_LOCAL_BIN" ] && [ ! -d "$ROS_LOCAL_BIN" ]; then
+		printf '%s\n' "$ROS_LOCAL_BIN"
+		return 0
+	fi
+	old_ifs=$IFS
+	IFS=:
+	for d in $PATH /opt/homebrew/bin /usr/local/bin "${HOME:-/nonexistent}/.local/bin"; do
+		[ -n "$d" ] || continue
+		real=$(CDPATH='' cd -- "$d" 2>/dev/null && pwd -P) || continue
+		# Skip this launcher's own directory (Claude Code puts plugin bin/ dirs on PATH).
+		[ "$real" = "$self_dir" ] && continue
+		if [ -x "$real/ros-local" ] && [ ! -d "$real/ros-local" ]; then
+			IFS=$old_ifs
+			printf '%s\n' "$real/ros-local"
+			return 0
+		fi
+	done
+	IFS=$old_ifs
+	return 1
+}
+
+# A second launcher further down PATH must not call back into this one.
+if [ -z "${ROS_LOCAL_LAUNCHER:-}" ] && bin=$(find_ros_local); then
+	ROS_LOCAL_LAUNCHER=1
+	export ROS_LOCAL_LAUNCHER
+	exec "$bin" "$@"
+fi
+
+case "$1 ${2:-}" in
+"hook session-start" | "hook SessionStart")
+	cat >/dev/null 2>&1 # drain the hook input
+	printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"ROS is not set up on this machine (the ros-local helper is missing). If the user asks for ROS features, tell them to install it: brew install hvoguetech/tap/ros-local, then ros-local login."}}\n' "$(printf '%s' "$hint" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+	exit 0
+	;;
+"hook "*)
+	cat >/dev/null 2>&1
+	exit 0
+	;;
+*)
+	printf '%s\n' "$hint" >&2
+	exit 127
+	;;
+esac

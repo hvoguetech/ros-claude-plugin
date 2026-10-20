@@ -1,0 +1,37 @@
+name: Release
+
+# Runs on a `v<semver>` tag: builds ros-local for macOS and Linux, publishes a GitHub Release with
+# SHA-256 checksums signed by cosign (keyless), and updates the Homebrew formula in hvoguetech/homebrew-tap.
+#
+# Needs the HOMEBREW_TAP_GITHUB_TOKEN secret: a token that can push to hvoguetech/homebrew-tap.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release
+  id-token: write # keyless cosign signing
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: test before releasing
+        working-directory: cli
+        run: go test -count=1 ./...
+      - uses: sigstore/cosign-installer@v3
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

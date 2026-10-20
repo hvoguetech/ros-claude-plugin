@@ -1,0 +1,12 @@
+{
+  "name": "ros",
+  "version": "0.1.0",
+  "description": "Recall ROS memory, sync the project's approved skills and call ROS tools from local Claude Code sessions.",
+  "author": {
+    "name": "hvoguetech",
+    "url": "https://github.com/hvoguetech"
+  },
+  "homepage": "https://github.com/hvoguetech/ros-claude-plugin",
+  "repository": "https://github.com/hvoguetech/ros-claude-plugin",
+  "keywords": ["ros", "memory", "skills", "mcp"]
+}

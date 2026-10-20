@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ros": {
+      "type": "http",
+      "url": "${ROS_URL:-https://api.agentstudio.revora.dev}/v1/mcp/me",
+      "headersHelper": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" mcp-headers --project-dir \"${CLAUDE_PROJECT_DIR}\""
+    }
+  }
+}
