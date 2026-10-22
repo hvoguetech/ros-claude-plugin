@@ -61,4 +61,19 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: check
+          install-only: true
+      # `goreleaser check` exits 2 when the config is valid but uses a deprecated key. We keep `brews` on
+      # purpose: a formula installs on macOS and Linux (casks are macOS-oriented) and matches the tap's
+      # Formula/ros-local.rb. So accept exactly that outcome and fail on anything else.
+      - name: goreleaser check
+        run: |
+          set +e
+          out=$(goreleaser check 2>&1); code=$?
+          echo "$out"
+          if [ "$code" -eq 0 ]; then exit 0; fi
+          if [ "$code" -eq 2 ] && echo "$out" | grep -q "configuration is valid, but uses deprecated properties" \
+             && [ "$(echo "$out" | grep -c "DEPRECATED:")" -eq 1 ] && echo "$out" | grep -q "DEPRECATED:.*brews"; then
+            echo "::notice::goreleaser config is valid; the only issue is the deliberate 'brews' deprecation"
+            exit 0
+          fi
+          exit "$code"
