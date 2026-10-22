@@ -40,8 +40,20 @@ type Server struct {
 	AccessTTL     int // seconds
 
 	// refresh
-	RefreshError string // OAuth error to answer refreshes with ("" = succeed)
-	RefreshCalls int
+	RefreshError  string // OAuth error to answer refreshes with ("" = succeed)
+	RefreshCalls  int
+	RotateRefresh bool          // issue a new refresh token on every refresh; a spent one is reuse
+	RefreshDelay  time.Duration // slow refreshes (concurrency tests)
+	ReuseDetected bool          // set when a spent refresh token was presented
+	spentRefresh  map[string]bool
+	liveRefresh   map[string]bool
+
+	// local agent switches
+	LocalAgentDisabled  bool              // 403 local_agent_disabled on /v1/local/* and device sign-in
+	UnavailableProjects map[string]string // project id -> reason: project_unavailable on /sessions
+	LegacyUnavailable   bool              // answer unavailable projects with a bare 404 (pre-code backend)
+	MinPluginVersion    string
+	MinCLIVersion       string
 
 	// /v1/local
 	Projects       map[string]string // id → name
@@ -64,9 +76,11 @@ type Server struct {
 func New() *Server {
 	s := &Server{
 		ProjectID: "p1", DeviceID: "dev1", AccessTTL: 3600,
-		Projects:    map[string]string{"p1": "Payments"},
-		Repos:       map[string]string{},
-		validTokens: map[string]bool{},
+		Projects:     map[string]string{"p1": "Payments"},
+		Repos:        map[string]string{},
+		validTokens:  map[string]bool{},
+		spentRefresh: map[string]bool{}, liveRefresh: map[string]bool{"refresh-1": true},
+		UnavailableProjects: map[string]string{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/oauth/device_authorization", s.deviceAuthorization)
@@ -104,8 +118,16 @@ func oauthError(w http.ResponseWriter, code, desc string) {
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": code, "error_description": desc})
 }
 
+func structured(w http.ResponseWriter, status int, code, reason, msg string) {
+	writeJSON(w, status, map[string]any{"detail": map[string]string{"error": code, "reason": reason, "message": msg}})
+}
+
 func (s *Server) deviceAuthorization(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
+	if s.LocalAgentDisabled {
+		structured(w, 403, "local_agent_disabled", "org", "the local agent is not enabled")
+		return
+	}
 	if r.PostForm.Get("client_id") == "" {
 		oauthError(w, "invalid_client", "client_id is required")
 		return
@@ -148,6 +170,33 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		})
 	case "refresh_token":
 		s.RefreshCalls++
+		if s.RefreshDelay > 0 {
+			s.Mu.Unlock()
+			time.Sleep(s.RefreshDelay)
+			s.Mu.Lock()
+		}
+		if s.RotateRefresh {
+			rt := r.PostForm.Get("refresh_token")
+			if s.spentRefresh[rt] {
+				s.ReuseDetected = true
+				for k := range s.liveRefresh { // reuse revokes the whole family
+					delete(s.liveRefresh, k)
+				}
+				oauthError(w, "invalid_grant", "refresh token reuse detected; the device was signed out")
+				return
+			}
+			if !s.liveRefresh[rt] {
+				oauthError(w, "invalid_grant", "unknown refresh token")
+				return
+			}
+			delete(s.liveRefresh, rt)
+			s.spentRefresh[rt] = true
+			next := fmt.Sprintf("refresh-r%d", s.RefreshCalls)
+			s.liveRefresh[next] = true
+			writeJSON(w, 200, map[string]any{"access_token": s.issueLocked(), "token_type": "Bearer",
+				"expires_in": s.AccessTTL, "refresh_token": next, "scope": "local:session", "device_id": s.DeviceID})
+			return
+		}
 		if s.RefreshError != "" {
 			if s.RefreshError == "server_error" {
 				writeJSON(w, 503, map[string]string{"detail": "unavailable"})
@@ -173,6 +222,13 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSON(w, 401, map[string]string{"detail": "invalid token"})
+			return
+		}
+		s.Mu.Lock()
+		disabled := s.LocalAgentDisabled
+		s.Mu.Unlock()
+		if disabled {
+			structured(w, 403, "local_agent_disabled", "org", "the local agent is not enabled for this org")
 			return
 		}
 		next(w, r)
@@ -211,6 +267,14 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pid, _ := body["project_id"].(string)
+	if reason, gone := s.UnavailableProjects[pid]; pid != "" && gone {
+		if s.LegacyUnavailable {
+			writeJSON(w, 404, map[string]string{"detail": "project not found"})
+		} else {
+			structured(w, 403, "project_unavailable", reason, "project "+pid+" is unavailable")
+		}
+		return
+	}
 	if pid == "" {
 		pid = s.ProjectID
 	}
@@ -223,7 +287,8 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 		"skills_manifest_etag": etag,
 		"policy": map[string]any{"deny_paths": []string{}, "deny_commands": []string{}, "mcp_allowlist": []string{},
 			"egress_allowlist": []string{}, "enforcement": "audit", "etag": `"p"`},
-		"trace_url": s.URL + "/traces/t1",
+		"trace_url":          s.URL + "/traces/t1",
+		"min_plugin_version": s.MinPluginVersion, "min_cli_version": s.MinCLIVersion,
 	})
 }
 

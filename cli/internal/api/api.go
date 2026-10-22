@@ -35,10 +35,21 @@ func New(baseURL, token, userAgent string, timeout time.Duration) *Client {
 		HTTP: &http.Client{Timeout: timeout}}
 }
 
-// Error is a non-2xx answer. Code is the OAuth `error` when there is one.
+// Error codes the backend uses for local-agent conditions ros-local reacts to.
+const (
+	// CodeLocalAgentDisabled: the org or project hasn't turned the local agent on.
+	CodeLocalAgentDisabled = "local_agent_disabled"
+	// CodeProjectUnavailable: the requested project (a repo's link, or X-ROS-Project) can't be used:
+	// deleted, no access, or the local agent is off for it. Reason says which.
+	CodeProjectUnavailable = "project_unavailable"
+)
+
+// Error is a non-2xx answer. Code is the machine-readable error (an OAuth `error`, or a structured
+// `detail.error` / `detail.code`), Reason its sub-reason when the backend gives one.
 type Error struct {
 	Status int
 	Code   string
+	Reason string
 	Detail string
 }
 
@@ -48,6 +59,8 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("%s: %s", e.Code, e.Detail)
 	case e.Detail != "":
 		return fmt.Sprintf("HTTP %d: %s", e.Status, e.Detail)
+	case e.Code != "":
+		return e.Code
 	default:
 		return fmt.Sprintf("HTTP %d", e.Status)
 	}
@@ -59,7 +72,7 @@ func IsStatus(err error, status int) bool {
 	return errors.As(err, &e) && e.Status == status
 }
 
-// OAuthCode returns the OAuth error code of err, or "".
+// OAuthCode returns the error code of err (OAuth `error` or structured `detail.error`), or "".
 func OAuthCode(err error) string {
 	var e *Error
 	if errors.As(err, &e) {
@@ -68,20 +81,47 @@ func OAuthCode(err error) string {
 	return ""
 }
 
+// HasCode reports whether err carries that error code.
+func HasCode(err error, code string) bool { return code != "" && OAuthCode(err) == code }
+
+func firstString(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := m[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// decodeError reads the three shapes the backend answers with: an OAuth error
+// ({"error", "error_description"}), FastAPI's {"detail": "text"}, and a structured
+// {"detail": {"error"|"code", "reason", "message"|"detail"}} (or the same object at the top level).
 func decodeError(resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	e := &Error{Status: resp.StatusCode}
-	var body struct {
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
-		Detail      any    `json:"detail"`
-	}
+	var body map[string]any
 	if json.Unmarshal(b, &body) == nil {
-		e.Code, e.Detail = body.Error, body.Description
-		if e.Detail == "" && body.Detail != nil {
-			if s, ok := body.Detail.(string); ok {
-				e.Detail = s
-			} else if j, err := json.Marshal(body.Detail); err == nil {
+		e.Code = firstString(body, "error", "code")
+		e.Reason = firstString(body, "reason")
+		e.Detail = firstString(body, "error_description", "message")
+		switch d := body["detail"].(type) {
+		case string:
+			if e.Detail == "" {
+				e.Detail = d
+			}
+		case map[string]any:
+			if c := firstString(d, "error", "code"); c != "" {
+				e.Code = c
+			}
+			if r := firstString(d, "reason"); r != "" {
+				e.Reason = r
+			}
+			if m := firstString(d, "message", "detail", "error_description"); m != "" {
+				e.Detail = m
+			}
+		case nil:
+		default:
+			if j, err := json.Marshal(d); err == nil && e.Detail == "" {
 				e.Detail = string(j)
 			}
 		}
@@ -245,6 +285,8 @@ type Me struct {
 	Projects         []Project  `json:"projects"`
 	DefaultProjectID string     `json:"default_project_id"`
 	Repos            []RepoLink `json:"repos"`
+	MinPluginVersion string     `json:"min_plugin_version,omitempty"`
+	MinCLIVersion    string     `json:"min_cli_version,omitempty"`
 }
 
 func (c *Client) Me(ctx context.Context) (*Me, error) {
@@ -291,8 +333,8 @@ type Policy struct {
 	ETag            string   `json:"etag"`
 }
 
-// Session is the `POST /v1/local/sessions` answer. MinPluginVersion / MinCLIVersion are in the spec
-// (§13a) but not yet in the backend; they're read when present.
+// Session is the `POST /v1/local/sessions` answer. MinPluginVersion / MinCLIVersion (spec §13a) are read
+// when present: below them, ROS is off for the session and the banner says what to update.
 type Session struct {
 	RunID              string    `json:"run_id"`
 	ThreadID           string    `json:"thread_id"`

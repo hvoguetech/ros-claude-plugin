@@ -128,3 +128,92 @@ func TestLoginDenied(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestRotatedRefreshTokenIsStored(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.RotateRefresh = true
+	s := newSession(t, srv)
+	store(t, s, "old", time.Minute)
+	if _, err := s.AccessToken(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := s.Store.Get(s.Config.URL)
+	if saved.RefreshToken == "refresh-1" || saved.RefreshToken == "" {
+		t.Fatalf("rotated refresh token not stored: %+v", saved)
+	}
+	// Expire again: the next refresh uses the rotated token, so no reuse is detected.
+	saved.AccessExpiresAt = time.Now().Add(time.Minute)
+	_ = s.Store.Set(s.Config.URL, saved)
+	if _, err := s.AccessToken(context.Background()); err != nil || srv.ReuseDetected {
+		t.Fatalf("second refresh: err=%v reuse=%v", err, srv.ReuseDetected)
+	}
+}
+
+func TestReusedRefreshTokenSignsOutAndClearsCredentials(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.RotateRefresh = true
+	s := newSession(t, srv)
+	store(t, s, "old", time.Minute)
+	if _, err := s.AccessToken(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Put the spent token back, as a clobbering writer would.
+	store(t, s, "old", time.Minute)
+	if _, err := s.AccessToken(context.Background()); !errors.Is(err, ErrSignedOut) {
+		t.Fatalf("want ErrSignedOut on reuse, got %v", err)
+	}
+	if _, err := s.Store.Get(s.Config.URL); !errors.Is(err, config.ErrNoCredentials) {
+		t.Fatalf("dead credentials not removed: %v", err)
+	}
+}
+
+// Hooks and the MCP headersHelper start together. With rotation, two refreshes with the same token
+// would be reuse and revoke the device; the lock makes the others wait and reuse the first refresh.
+func TestConcurrentRefreshesDoNotTripReuseDetection(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.RotateRefresh = true
+	srv.RefreshDelay = 100 * time.Millisecond
+	s := newSession(t, srv)
+	store(t, s, "old", time.Minute)
+	const n = 6
+	toks := make(chan string, n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			sess := &Session{Config: s.Config, Store: s.Store, NewClient: s.NewClient}
+			tok, err := sess.AccessToken(context.Background())
+			toks <- tok
+			errs <- err
+		}()
+	}
+	first := ""
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("refresh %d: %v", i, err)
+		}
+		tok := <-toks
+		if first == "" {
+			first = tok
+		} else if tok != first {
+			t.Fatalf("callers got different tokens: %q vs %q", first, tok)
+		}
+	}
+	if srv.ReuseDetected || srv.RefreshCalls != 1 {
+		t.Fatalf("reuse=%v refreshes=%d, want one refresh and no reuse", srv.ReuseDetected, srv.RefreshCalls)
+	}
+}
+
+func TestLoginLocalAgentDisabled(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.LocalAgentDisabled = true
+	s := newSession(t, srv)
+	_, err := s.Login(context.Background(), LoginOptions{Out: io.Discard,
+		Sleep: func(context.Context, time.Duration) error { return nil }})
+	if err == nil || err.Error() != LocalAgentDisabledMsg {
+		t.Fatalf("got %v", err)
+	}
+}

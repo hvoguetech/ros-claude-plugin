@@ -230,17 +230,31 @@ func (a *App) sessionStart() int {
 		req.Repo, req.Branch, req.Head = repo.Remote(ctx), repo.Branch(ctx), repo.Head(ctx)
 		req.RecentCommits = repo.RecentCommits(ctx, 5)
 	}
-	if lnk != nil {
+	// A stale link is never sent: the server resolves the project from the repo or the default instead.
+	if lnk != nil && !lnk.Stale {
 		req.ProjectID = lnk.ProjectID
 	}
 	s, err := c.OpenSession(ctx, req)
+	if err != nil && req.ProjectID != "" && linkRefused(err) {
+		// The linked project is gone, inaccessible or has the local agent off: remember that, then
+		// open the session without it so the developer still gets ROS where the server can resolve it.
+		_ = link.MarkStale(repo, lnk, refusalReason(err))
+		req.ProjectID = ""
+		s, err = c.OpenSession(ctx, req)
+	}
+	var notes []string
+	if lnk != nil && lnk.Stale {
+		notes = append(notes, staleNote(lnk))
+	}
 	if err != nil {
 		var apiErr *api.Error
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Status == 401:
 			return a.emit(signedOut())
+		case api.HasCode(err, api.CodeLocalAgentDisabled):
+			return a.emit(startOutput(strings.Join(append([]string{"ROS: " + auth.LocalAgentDisabledMsg}, notes...), "\n"), ""))
 		case errors.As(err, &apiErr) && apiErr.Status < 500:
-			return a.emit(startOutput("ROS: "+apiErr.Detail, ""))
+			return a.emit(startOutput(strings.Join(append([]string{"ROS: " + firstNonEmpty(apiErr.Detail, apiErr.Code)}, notes...), "\n"), ""))
 		default:
 			return a.emit(a.offline(repo, now, err))
 		}
@@ -249,7 +263,6 @@ func (a *App) sessionStart() int {
 		_ = saveState(in.SessionID, &sessionState{RunID: s.RunID, ProjectID: s.ProjectID, URL: cfg.URL, OpenedAt: now.UTC()})
 	}
 
-	var notes []string
 	if v := a.pluginVersion(); s.MinPluginVersion != "" && versionLess(v, s.MinPluginVersion) {
 		return a.emit(startOutput("ROS plugin out of date — run `claude plugin update ros`; ROS is off for this session", ""))
 	}
@@ -264,7 +277,7 @@ func (a *App) sessionStart() int {
 
 	skillsPart := ""
 	if repo != nil {
-		if lnk == nil || lnk.ProjectID != s.ProjectID && lnk.Source == "session" {
+		if lnk == nil || !lnk.Stale && lnk.ProjectID != s.ProjectID && lnk.Source == "session" {
 			_ = link.Write(repo, &link.Link{ProjectID: s.ProjectID, ProjectName: s.ProjectName,
 				Repo: gitx.RepoKey(req.Repo), Source: "session"})
 		}
@@ -300,6 +313,36 @@ func (a *App) sessionStart() int {
 	}
 	return a.emit(&hookOutput{SystemMessage: banner,
 		HookSpecificOutput: &hookSpecific{HookEventName: "SessionStart", AdditionalContext: model}})
+}
+
+// linkRefused reports whether opening a session failed because of the linked project itself, as opposed
+// to the account, the org switch or the network.
+func linkRefused(err error) bool {
+	if api.HasCode(err, api.CodeProjectUnavailable) {
+		return true
+	}
+	if api.HasCode(err, api.CodeLocalAgentDisabled) || api.OAuthCode(err) != "" {
+		return false // an org-wide switch or a coded error about something else
+	}
+	// Before the backend's project_unavailable code: 403 (local agent off for it) / 404 (gone, no access).
+	return api.IsStatus(err, 403) || api.IsStatus(err, 404)
+}
+
+func refusalReason(err error) string {
+	var e *api.Error
+	if errors.As(err, &e) {
+		return firstNonEmpty(e.Reason, e.Detail, e.Code)
+	}
+	return err.Error()
+}
+
+func staleNote(l *link.Link) string {
+	name := firstNonEmpty(l.ProjectName, l.ProjectID)
+	why := ""
+	if l.StaleReason != "" {
+		why = " (" + l.StaleReason + ")"
+	}
+	return fmt.Sprintf("ROS: this repo is linked to project %q, which is unavailable%s — run `ros-local link`", name, why)
 }
 
 func validSource(s string) bool {

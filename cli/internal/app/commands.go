@@ -83,8 +83,14 @@ func (a *App) login(args []string) int {
 		who = "your account"
 	}
 	fmt.Fprintf(a.Stdout, "\nSigned in to %s as %s.\n", cfg.URL, who)
-	if me != nil && len(me.Projects) == 0 {
+	switch {
+	case api.HasCode(err, api.CodeLocalAgentDisabled):
+		fmt.Fprintln(a.Stdout, auth.LocalAgentDisabledMsg+"; ask an admin to turn it on.")
+	case me != nil && len(me.Projects) == 0:
 		fmt.Fprintln(a.Stdout, "No project has the local agent enabled yet; ask a project admin to turn it on.")
+	}
+	if me != nil && me.MinCLIVersion != "" && versionLess(a.Version, me.MinCLIVersion) {
+		fmt.Fprintf(a.Stdout, "This ros-local (%s) is older than ROS supports (%s): run `brew upgrade ros-local`.\n", a.Version, me.MinCLIVersion)
 	}
 
 	// Set up the repo we're in, ahead of the first session (spec §7: the skills dir must exist at start).
@@ -225,6 +231,9 @@ func (a *App) link(args []string) int {
 		return a.errorf("%v", err)
 	}
 	me, err := c.Me(ctx)
+	if api.HasCode(err, api.CodeLocalAgentDisabled) {
+		return a.errorf("%s", auth.LocalAgentDisabledMsg)
+	}
 	if err != nil {
 		return a.errorf("asking ROS which projects you can use: %v", err)
 	}
@@ -341,12 +350,19 @@ func (a *App) status(args []string) int {
 			fmt.Fprintf(w, "Signed in:  yes, offline (%v)\n", terr)
 		default:
 			who := cfg.UserEmail
-			if me, err := a.client(cfg.URL, token).Me(ctx); err == nil {
+			me, merr := a.client(cfg.URL, token).Me(ctx)
+			if merr == nil {
 				who = me.User.Email
 			}
 			fmt.Fprintf(w, "Signed in:  %s (device %s, token in the %s)\n", who, cfg.DeviceID, store.Name())
 			if c, _ := store.Get(cfg.URL); c != nil {
 				fmt.Fprintf(w, "Token:      valid until %s\n", c.AccessExpiresAt.Local().Format(time.Kitchen))
+			}
+			switch {
+			case api.HasCode(merr, api.CodeLocalAgentDisabled):
+				fmt.Fprintf(w, "Local agent: %s\n", auth.LocalAgentDisabledMsg)
+			case me != nil && me.MinCLIVersion != "" && versionLess(a.Version, me.MinCLIVersion):
+				fmt.Fprintf(w, "Update:     ros-local %s is older than ROS supports (%s) — run `brew upgrade ros-local`\n", a.Version, me.MinCLIVersion)
 			}
 		}
 	}
@@ -358,6 +374,9 @@ func (a *App) status(args []string) int {
 	l, _ := link.Read(repo)
 	if l == nil {
 		fmt.Fprintf(w, "Repo:       %s (not linked; the next session links it, or run `ros-local link`)\n", repo.Root)
+	} else if l.Stale {
+		fmt.Fprintf(w, "Repo:       %s → project %q is unavailable (%s) — run `ros-local link`\n", repo.Root,
+			firstNonEmpty(l.ProjectName, l.ProjectID), firstNonEmpty(l.StaleReason, "refused by ROS"))
 	} else {
 		fmt.Fprintf(w, "Repo:       %s → project %q (%s)\n", repo.Root, l.ProjectName, l.ProjectID)
 	}

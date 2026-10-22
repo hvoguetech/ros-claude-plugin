@@ -56,12 +56,14 @@ func (a *App) mcpHeaders(args []string) int {
 	headers := map[string]string{"Authorization": "Bearer " + token}
 	if dir := resolveProjectDir(*projectDir, a.Getenv); dir != "" {
 		if repo, err := gitx.Find(dir); err == nil {
-			if l, _ := link.Read(repo); l != nil {
+			// A stale link (ROS refused its project) is left out so the server falls back, instead of
+			// every tool call failing on project_unavailable; SessionStart keeps telling the developer.
+			if l, _ := link.Read(repo); l != nil && !l.Stale {
 				headers[ProjectHeader] = l.ProjectID
 			}
 		}
 	}
-	// No link: the header is left out and the server uses the device's default project (§12 step 4).
+	// No usable link: the header is left out and the server resolves the project itself (§12).
 	enc := json.NewEncoder(a.Stdout)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(headers); err != nil {
