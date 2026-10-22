@@ -442,3 +442,45 @@ func TestMinVersionsTurnROSOff(t *testing.T) {
 		}
 	}
 }
+
+func TestNoProjectBanner(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	h.srv.NoProject = true
+	code, out, _ := h.run(`{"session_id":"s1"}`, "hook", "session-start")
+	msg := decodeHook(t, out).SystemMessage
+	if code != 0 || !strings.HasPrefix(msg, "ROS: no ROS project for this repo — run `ros-local link`") {
+		t.Fatalf("%d %q", code, msg)
+	}
+}
+
+func TestUnavailableProjectReasonsUseBackendStatuses(t *testing.T) {
+	for _, reason := range []string{"not_found", "deleted", "archived", "no_access", "local_agent_disabled"} {
+		h := newHarness(t)
+		h.signIn(time.Hour)
+		h.srv.UnavailableProjects["p-x"] = reason
+		r := h.linkTo("p-x", "X")
+		_, out, _ := h.run(`{"session_id":"s"}`, "hook", "session-start")
+		msg := decodeHook(t, out).SystemMessage
+		if !strings.Contains(msg, "("+reason+") — run `ros-local link`") || !strings.HasPrefix(msg, `ROS · project "Payments"`) {
+			t.Errorf("%s: %q", reason, msg)
+		}
+		if l, _ := link.Read(r); !l.Stale {
+			t.Errorf("%s: link not marked stale", reason)
+		}
+	}
+}
+
+// A refresh refused with local_agent_disabled shows the disabled banner, not "signed out".
+func TestSessionStartRefreshRefusedDisabled(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Minute) // inside the refresh window
+	h.srv.LocalAgentDisabled = true
+	_, out, _ := h.run(`{"session_id":"s"}`, "hook", "session-start")
+	if msg := decodeHook(t, out).SystemMessage; msg != "ROS: Local agent isn't enabled for your org/project" {
+		t.Fatalf("%q", msg)
+	}
+	if c, err := (config.FileStore{}).Get(h.srv.URL); err != nil || c.RefreshToken != "refresh-1" {
+		t.Fatal("refresh token dropped")
+	}
+}

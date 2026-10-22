@@ -217,3 +217,40 @@ func TestLoginLocalAgentDisabled(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// local_agent_disabled on refresh is not a sign-out: nothing was rotated, so the refresh token stays.
+func TestRefreshLocalAgentDisabledKeepsCredentials(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	s := newSession(t, srv)
+	store(t, s, "old", time.Minute)
+	srv.LocalAgentDisabled = true
+	if _, err := s.AccessToken(context.Background()); !errors.Is(err, ErrLocalAgentDisabled) {
+		t.Fatalf("want ErrLocalAgentDisabled, got %v", err)
+	}
+	saved, err := s.Store.Get(s.Config.URL)
+	if err != nil || saved.RefreshToken != "refresh-1" {
+		t.Fatalf("credentials not kept: %+v %v", saved, err)
+	}
+	// Once it's turned back on, the same refresh token works.
+	srv.LocalAgentDisabled = false
+	if _, err := s.AccessToken(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Only invalid_grant means signed out; a bare 401 on the token endpoint isn't in the contract.
+func TestRefresh401IsNotASignOut(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.RefreshError = "unauthorized"
+	s := newSession(t, srv)
+	store(t, s, "current", time.Minute)
+	tok, err := s.AccessToken(context.Background())
+	if err != nil || tok != "current" {
+		t.Fatalf("tok=%q err=%v", tok, err)
+	}
+	if saved, _ := s.Store.Get(s.Config.URL); saved == nil || saved.RefreshToken != "refresh-1" {
+		t.Fatal("credentials deleted on a 401")
+	}
+}

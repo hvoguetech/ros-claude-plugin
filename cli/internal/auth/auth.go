@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/hvoguetech/ros-claude-plugin/cli/internal/api"
@@ -28,6 +27,10 @@ var ErrSignedOut = errors.New("ROS: signed out — run `ros-local login`")
 
 // LocalAgentDisabledMsg is shown wherever the server answers local_agent_disabled.
 const LocalAgentDisabledMsg = "Local agent isn't enabled for your org/project"
+
+// ErrLocalAgentDisabled: the server refused a refresh because the local agent is off. The credentials
+// are kept; it is not a sign-out.
+var ErrLocalAgentDisabled = errors.New(LocalAgentDisabledMsg)
 
 // Now is the clock (tests replace it).
 var Now = time.Now
@@ -50,16 +53,12 @@ func Valid(c *config.Credentials, d time.Duration) bool {
 // the same token would look like reuse to the server, which revokes the device.
 func LockPath() string { return filepath.Join(config.Home(), "refresh.lock") }
 
-// refused reports whether the server refused the refresh token for good: expired, revoked, the device
-// signed out, or a rotated token presented twice (reuse detection). The only fix is `ros-local login`.
+// refused reports whether the server refused the refresh token for good. Per the backend contract
+// that is exactly `invalid_grant`: expired, the device revoked, or a rotated token presented after its
+// grace window (reuse detection). The only fix is `ros-local login`. Anything else (5xx, offline,
+// local_agent_disabled) leaves the refresh token in place.
 func refused(err error) bool {
-	var e *api.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-	code := strings.ToLower(e.Code)
-	return code == "invalid_grant" || code == "invalid_token" || code == "access_denied" ||
-		strings.Contains(code, "reuse") || strings.Contains(code, "revoked") || e.Status == 401
+	return api.OAuthCode(err) == "invalid_grant"
 }
 
 // AccessToken returns a device access token with more than RefreshAhead left, refreshing it when needed.
@@ -100,6 +99,10 @@ func (s *Session) AccessToken(ctx context.Context) (string, error) {
 		if refused(err) {
 			_ = s.Store.Delete(s.Config.URL)
 			return "", ErrSignedOut
+		}
+		if api.HasCode(err, api.CodeLocalAgentDisabled) {
+			// Nothing was rotated: keep the refresh token for when an admin turns the local agent on.
+			return "", ErrLocalAgentDisabled
 		}
 		if Valid(creds, 0) {
 			return creds.AccessToken, nil

@@ -213,6 +213,9 @@ func (a *App) sessionStart() int {
 	if errors.Is(err, auth.ErrSignedOut) {
 		return a.emit(signedOut())
 	}
+	if errors.Is(err, auth.ErrLocalAgentDisabled) {
+		return a.emit(startOutput("ROS: "+auth.LocalAgentDisabledMsg, ""))
+	}
 	if err != nil {
 		return a.emit(a.offline(repo, now, err))
 	}
@@ -251,6 +254,10 @@ func (a *App) sessionStart() int {
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Status == 401:
 			return a.emit(signedOut())
+		case api.HasCode(err, api.CodeNoProject):
+			return a.emit(startOutput(strings.Join(append([]string{
+				"ROS: no ROS project for this repo — run `ros-local link` (or ask an admin to enable the local agent on a project)"},
+				notes...), "\n"), ""))
 		case api.HasCode(err, api.CodeLocalAgentDisabled):
 			return a.emit(startOutput(strings.Join(append([]string{"ROS: " + auth.LocalAgentDisabledMsg}, notes...), "\n"), ""))
 		case errors.As(err, &apiErr) && apiErr.Status < 500:

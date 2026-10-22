@@ -39,9 +39,11 @@ func New(baseURL, token, userAgent string, timeout time.Duration) *Client {
 const (
 	// CodeLocalAgentDisabled: the org or project hasn't turned the local agent on.
 	CodeLocalAgentDisabled = "local_agent_disabled"
-	// CodeProjectUnavailable: the requested project (a repo's link, or X-ROS-Project) can't be used:
-	// deleted, no access, or the local agent is off for it. Reason says which.
+	// CodeProjectUnavailable: the requested project (a repo's link, or X-ROS-Project) can't be used.
+	// Reason: not_found, deleted (404), archived, no_access, local_agent_disabled (403).
 	CodeProjectUnavailable = "project_unavailable"
+	// CodeNoProject: no project was named and none resolves for the caller (404).
+	CodeNoProject = "no_project"
 )
 
 // Error is a non-2xx answer. Code is the machine-readable error (an OAuth `error`, or a structured
