@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"time"
 
 	"github.com/hvoguetech/ros-claude-plugin/cli/internal/api"
 	"github.com/hvoguetech/ros-claude-plugin/cli/internal/config"
+	"github.com/hvoguetech/ros-claude-plugin/cli/internal/fsutil"
 )
 
 // RefreshAhead is how long before expiry the access token is refreshed. The backend's access tokens live
@@ -22,6 +24,13 @@ const RefreshAhead = 10 * time.Minute
 // ErrSignedOut means there are no usable credentials: never signed in, or the refresh token was refused
 // (expired, device revoked, account disabled). The fix is `ros-local login`.
 var ErrSignedOut = errors.New("ROS: signed out — run `ros-local login`")
+
+// LocalAgentDisabledMsg is shown wherever the server answers local_agent_disabled.
+const LocalAgentDisabledMsg = "Local agent isn't enabled for your org/project"
+
+// ErrLocalAgentDisabled: the server refused a refresh because the local agent is off. The credentials
+// are kept; it is not a sign-out.
+var ErrLocalAgentDisabled = errors.New(LocalAgentDisabledMsg)
 
 // Now is the clock (tests replace it).
 var Now = time.Now
@@ -39,19 +48,44 @@ func Valid(c *config.Credentials, d time.Duration) bool {
 	return c != nil && c.AccessToken != "" && Now().Add(d).Before(c.AccessExpiresAt)
 }
 
+// LockPath is the file that serialises refreshes across ros-local processes (hooks and the MCP
+// headersHelper start at the same moment). With refresh-token rotation, two processes refreshing with
+// the same token would look like reuse to the server, which revokes the device.
+func LockPath() string { return filepath.Join(config.Home(), "refresh.lock") }
+
+// refused reports whether the server refused the refresh token for good. Per the backend contract
+// that is exactly `invalid_grant`: expired, the device revoked, or a rotated token presented after its
+// grace window (reuse detection). The only fix is `ros-local login`. Anything else (5xx, offline,
+// local_agent_disabled) leaves the refresh token in place.
+func refused(err error) bool {
+	return api.OAuthCode(err) == "invalid_grant"
+}
+
 // AccessToken returns a device access token with more than RefreshAhead left, refreshing it when needed.
-// If the refresh fails for a transient reason (offline, 5xx) and the current token hasn't expired yet,
-// the current token is returned: a slightly stale token beats no token. A refused refresh token returns
-// ErrSignedOut.
+// Refreshes are serialised by a file lock, and the credentials are re-read once it's held, so a refresh
+// another process just did is reused instead of repeated. The rotated refresh token is saved before the
+// lock is released. If the refresh fails for a transient reason (offline, 5xx) and the current token
+// hasn't expired yet, the current token is returned: a slightly stale token beats no token. A refused
+// refresh token returns ErrSignedOut and the dead credentials are removed.
 func (s *Session) AccessToken(ctx context.Context) (string, error) {
-	creds, err := s.Store.Get(s.Config.URL)
-	if errors.Is(err, config.ErrNoCredentials) {
-		return "", ErrSignedOut
-	}
+	creds, err := s.read()
 	if err != nil {
-		return "", fmt.Errorf("reading credentials from the %s: %w", s.Store.Name(), err)
+		return "", err
 	}
 	if Valid(creds, RefreshAhead) {
+		return creds.AccessToken, nil
+	}
+	if unlock, lerr := fsutil.Lock(ctx, LockPath()); lerr == nil {
+		defer unlock()
+		if creds, err = s.read(); err != nil {
+			return "", err
+		}
+		if Valid(creds, RefreshAhead) { // another process refreshed while we waited
+			return creds.AccessToken, nil
+		}
+	} else if Valid(creds, 0) {
+		// Couldn't get the lock in time (another refresh is slow): use the still-valid token rather
+		// than racing that refresh with the same refresh token.
 		return creds.AccessToken, nil
 	}
 	if creds.RefreshToken == "" {
@@ -62,9 +96,13 @@ func (s *Session) AccessToken(ctx context.Context) (string, error) {
 	}
 	tok, err := s.NewClient(s.Config.URL, "").Refresh(ctx, config.ClientID, creds.RefreshToken)
 	if err != nil {
-		var apiErr *api.Error
-		if errors.As(err, &apiErr) && (apiErr.Code == "invalid_grant" || apiErr.Status == 401) {
+		if refused(err) {
+			_ = s.Store.Delete(s.Config.URL)
 			return "", ErrSignedOut
+		}
+		if api.HasCode(err, api.CodeLocalAgentDisabled) {
+			// Nothing was rotated: keep the refresh token for when an admin turns the local agent on.
+			return "", ErrLocalAgentDisabled
 		}
 		if Valid(creds, 0) {
 			return creds.AccessToken, nil
@@ -76,12 +114,26 @@ func (s *Session) AccessToken(ctx context.Context) (string, error) {
 		AccessExpiresAt: Now().Add(time.Duration(tok.ExpiresIn) * time.Second),
 		RefreshToken:    creds.RefreshToken,
 	}
-	if tok.RefreshToken != "" { // rotation, should the backend start doing it
+	if tok.RefreshToken != "" { // rotated: the old refresh token is now spent
 		next.RefreshToken = tok.RefreshToken
 	}
-	// A failed save still leaves a usable token for this call; the next call just refreshes again.
-	_ = s.Store.Set(s.Config.URL, next)
+	// The rotated token must be saved: the spent one would trip reuse detection on the next refresh.
+	// Retry once; if the store still fails, this call still gets its access token.
+	if err := s.Store.Set(s.Config.URL, next); err != nil {
+		_ = s.Store.Set(s.Config.URL, next)
+	}
 	return next.AccessToken, nil
+}
+
+func (s *Session) read() (*config.Credentials, error) {
+	creds, err := s.Store.Get(s.Config.URL)
+	if errors.Is(err, config.ErrNoCredentials) {
+		return nil, ErrSignedOut
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading credentials from the %s: %w", s.Store.Name(), err)
+	}
+	return creds, nil
 }
 
 // LoginOptions configure the device flow.
@@ -118,6 +170,9 @@ func (s *Session) Login(ctx context.Context, o LoginOptions) (*api.Token, error)
 	da, err := c.StartDeviceAuthorization(ctx, config.ClientID, api.DeviceRequest{
 		ProjectID: o.ProjectID, DeviceName: o.DeviceName, Platform: o.Platform, PluginVersion: o.Version})
 	if err != nil {
+		if api.HasCode(err, api.CodeLocalAgentDisabled) {
+			return nil, errors.New(LocalAgentDisabledMsg)
+		}
 		if api.IsStatus(err, 404) {
 			return nil, fmt.Errorf("local agent sign-in is not enabled on %s", s.Config.URL)
 		}

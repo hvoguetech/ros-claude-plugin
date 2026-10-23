@@ -38,6 +38,16 @@ type Link struct {
 	Repo        string    `json:"repo,omitempty"`   // host/owner/name, when the repo has a remote
 	Source      string    `json:"source,omitempty"` // explicit | remote | default | prompt | session
 	LinkedAt    time.Time `json:"linked_at"`
+	// Stale is set when ROS reports the linked project unavailable (deleted, no access, local agent
+	// off). A stale link isn't sent to ROS, and every session says so until `ros-local link` replaces it.
+	Stale       bool   `json:"stale,omitempty"`
+	StaleReason string `json:"stale_reason,omitempty"`
+}
+
+// MarkStale records that ROS refused the linked project.
+func MarkStale(r *gitx.Repo, l *Link, reason string) error {
+	l.Stale, l.StaleReason = true, reason
+	return Write(r, l)
 }
 
 // Path is where the link for repo is stored.

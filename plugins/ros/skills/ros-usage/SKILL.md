@@ -38,6 +38,11 @@ Guidelines:
   the status line) only if a call needs a different project or a tool asks for it. An unknown project is
   an error, never a silent fallback: if a call fails on the project, tell the user rather than guessing.
 - **Available tools depend on sign-in scopes.** If a tool above isn't listed, the device wasn't granted it.
+- **Tool errors that need the user.** A tool result with `"error": "project_unavailable"` means this
+  repo's ROS project can't be used (its `reason` says why: deleted, archived, no access, local agent
+  off). `"no_project"` means no project could be resolved. In both cases tell the user to run
+  `ros-local link` in a terminal; don't retry with a guessed project. `"local_agent_disabled"` means an
+  admin has to turn the local agent on.
 - **Remember sparingly.** Save decisions, conventions and gotchas that will matter in a later session,
   not a log of this one. Ask before saving anything about a person, and never save secrets, tokens or
   customer data.

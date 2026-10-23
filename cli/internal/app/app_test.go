@@ -328,3 +328,159 @@ func TestVersionLess(t *testing.T) {
 		}
 	}
 }
+
+func (h *harness) linkTo(projectID, name string) *gitx.Repo {
+	h.t.Helper()
+	r, _ := gitx.Find(h.repo)
+	if err := link.Write(r, &link.Link{ProjectID: projectID, ProjectName: name, Source: "explicit"}); err != nil {
+		h.t.Fatal(err)
+	}
+	return r
+}
+
+func TestStaleLinkIsReportedAndBypassed(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "project_unavailable", true: "legacy 404"}[legacy], func(t *testing.T) {
+			h := newHarness(t)
+			h.signIn(time.Hour)
+			h.srv.UnavailableProjects["p-gone"] = "deleted"
+			h.srv.LegacyUnavailable = legacy
+			r := h.linkTo("p-gone", "Old Payments")
+
+			code, out, _ := h.run(`{"session_id":"s1"}`, "hook", "session-start")
+			o := decodeHook(t, out)
+			if code != 0 || !strings.Contains(o.SystemMessage, `linked to project "Old Payments", which is unavailable`) ||
+				!strings.Contains(o.SystemMessage, "run `ros-local link`") {
+				t.Fatalf("banner %q", o.SystemMessage)
+			}
+			// The session still opened, on the server's fallback project.
+			if !strings.HasPrefix(o.SystemMessage, `ROS · project "Payments"`) || len(h.srv.Sessions) != 2 {
+				t.Fatalf("no fallback session: %q, %d calls", o.SystemMessage, len(h.srv.Sessions))
+			}
+			if _, sent := h.srv.Sessions[1]["project_id"]; sent {
+				t.Fatal("retry still sent the stale project")
+			}
+			l, _ := link.Read(r)
+			if !l.Stale || l.ProjectID != "p-gone" {
+				t.Fatalf("link not marked stale: %+v", l)
+			}
+			if !legacy && l.StaleReason != "deleted" {
+				t.Fatalf("reason %q", l.StaleReason)
+			}
+
+			// Next session: the stale project isn't sent at all, and the banner keeps saying so.
+			_, out, _ = h.run(`{"session_id":"s2"}`, "hook", "session-start")
+			if !strings.Contains(decodeHook(t, out).SystemMessage, "run `ros-local link`") {
+				t.Fatal("stale banner went quiet")
+			}
+			if _, sent := h.srv.Sessions[2]["project_id"]; sent || len(h.srv.Sessions) != 3 {
+				t.Fatal("stale project sent again")
+			}
+
+			// mcp-headers leaves the stale project out so tool calls fall back too.
+			_, out, _ = h.run("", "mcp-headers", "--project-dir", h.repo)
+			if strings.Contains(out, "X-ROS-Project") || !strings.Contains(out, "Bearer") {
+				t.Fatalf("headers %s", out)
+			}
+
+			// `ros-local link` replaces it, and the banner clears.
+			if code, out, errOut := h.run("", "link", "--project", "p1"); code != 0 {
+				t.Fatalf("link: %s %s", out, errOut)
+			}
+			_, out, _ = h.run(`{"session_id":"s3"}`, "hook", "session-start")
+			if strings.Contains(decodeHook(t, out).SystemMessage, "unavailable") {
+				t.Fatal("banner still stale after relinking")
+			}
+		})
+	}
+}
+
+func TestLocalAgentDisabled(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	h.srv.LocalAgentDisabled = true
+	code, out, _ := h.run(`{"session_id":"s1"}`, "hook", "session-start")
+	if code != 0 || decodeHook(t, out).SystemMessage != "ROS: Local agent isn't enabled for your org/project" {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, _, errOut := h.run("", "link")
+	if code == 0 || !strings.Contains(errOut, "Local agent isn't enabled for your org/project") {
+		t.Fatalf("link: %d %s", code, errOut)
+	}
+	_, out, _ = h.run("", "status")
+	if !strings.Contains(out, "Local agent isn't enabled for your org/project") {
+		t.Fatalf("status: %s", out)
+	}
+}
+
+func TestMinVersionsTurnROSOff(t *testing.T) {
+	plugin := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(plugin, ".claude-plugin"), 0o755)
+	_ = os.WriteFile(filepath.Join(plugin, ".claude-plugin", "plugin.json"), []byte(`{"name":"ros","version":"0.1.0"}`), 0o644)
+	cases := []struct {
+		minPlugin, minCLI, want string
+	}{
+		{"0.2.0", "", "ROS plugin out of date — run `claude plugin update ros`; ROS is off for this session"},
+		{"", "0.3.1", "ros-local out of date — run `brew upgrade ros-local`; ROS is off for this session"},
+		{"0.1.0", "0.1.0", `ROS · project "Payments"`},
+	}
+	for _, c := range cases {
+		h := newHarness(t)
+		h.signIn(time.Hour)
+		h.env["CLAUDE_PLUGIN_ROOT"] = plugin
+		h.srv.MinPluginVersion, h.srv.MinCLIVersion = c.minPlugin, c.minCLI
+		_, out, _ := h.run(`{"session_id":"s"}`, "hook", "session-start")
+		o := decodeHook(t, out)
+		if !strings.HasPrefix(o.SystemMessage, c.want) {
+			t.Errorf("min plugin %q cli %q: banner %q", c.minPlugin, c.minCLI, o.SystemMessage)
+		}
+		if c.want != cases[2].want && o.HookSpecificOutput != nil {
+			t.Errorf("ROS context given to an out-of-date client: %+v", o.HookSpecificOutput)
+		}
+		if h.srv.Sessions[0]["plugin_version"] != "0.1.0" {
+			t.Errorf("plugin version not sent: %v", h.srv.Sessions[0]["plugin_version"])
+		}
+	}
+}
+
+func TestNoProjectBanner(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	h.srv.NoProject = true
+	code, out, _ := h.run(`{"session_id":"s1"}`, "hook", "session-start")
+	msg := decodeHook(t, out).SystemMessage
+	if code != 0 || !strings.HasPrefix(msg, "ROS: no ROS project for this repo — run `ros-local link`") {
+		t.Fatalf("%d %q", code, msg)
+	}
+}
+
+func TestUnavailableProjectReasonsUseBackendStatuses(t *testing.T) {
+	for _, reason := range []string{"not_found", "deleted", "archived", "no_access", "local_agent_disabled"} {
+		h := newHarness(t)
+		h.signIn(time.Hour)
+		h.srv.UnavailableProjects["p-x"] = reason
+		r := h.linkTo("p-x", "X")
+		_, out, _ := h.run(`{"session_id":"s"}`, "hook", "session-start")
+		msg := decodeHook(t, out).SystemMessage
+		if !strings.Contains(msg, "("+reason+") — run `ros-local link`") || !strings.HasPrefix(msg, `ROS · project "Payments"`) {
+			t.Errorf("%s: %q", reason, msg)
+		}
+		if l, _ := link.Read(r); !l.Stale {
+			t.Errorf("%s: link not marked stale", reason)
+		}
+	}
+}
+
+// A refresh refused with local_agent_disabled shows the disabled banner, not "signed out".
+func TestSessionStartRefreshRefusedDisabled(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Minute) // inside the refresh window
+	h.srv.LocalAgentDisabled = true
+	_, out, _ := h.run(`{"session_id":"s"}`, "hook", "session-start")
+	if msg := decodeHook(t, out).SystemMessage; msg != "ROS: Local agent isn't enabled for your org/project" {
+		t.Fatalf("%q", msg)
+	}
+	if c, err := (config.FileStore{}).Get(h.srv.URL); err != nil || c.RefreshToken != "refresh-1" {
+		t.Fatal("refresh token dropped")
+	}
+}

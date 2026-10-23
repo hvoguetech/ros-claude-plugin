@@ -73,6 +73,13 @@ ROS · project "Payments" · 14 skills (synced 2m ago) · memory: personal_agent
 - `/ros:sync` syncs the project's skills now.
 - If the banner says `ROS skills installed — run /reload-skills`, run `/reload-skills` once.
 - If it says `ROS: signed out — run ros-local login`, do that.
+- If it says the repo is linked to a project that is **unavailable** (deleted, no access, or the local
+  agent turned off for it), run `ros-local link`. Until then the stale link isn't sent to ROS, so
+  sessions and tools fall back to the project ROS resolves for you.
+- `Local agent isn't enabled for your org/project` means an admin has to turn it on in the project's
+  settings (Local agent).
+- Below the minimum version ROS supports, the banner tells you to update the plugin or `ros-local`,
+  and ROS stays off for that session.
 
 **Synced skills** live in `.claude/skills/ros-<name>/`. `ros-local` only writes and removes the
 directories it lists in `.claude/skills/.ros-manifest.json`. Your own skills are never touched. If you

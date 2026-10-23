@@ -12,7 +12,7 @@
       "name": "ros",
       "source": "./plugins/ros",
       "description": "Recall ROS memory, sync the project's approved skills and call ROS tools from local Claude Code sessions.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "productivity",
       "homepage": "https://github.com/hvoguetech/ros-claude-plugin"
     }
