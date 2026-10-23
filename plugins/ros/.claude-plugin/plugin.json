@@ -1,6 +1,6 @@
 {
   "name": "ros",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Recall ROS memory, sync the project's approved skills and call ROS tools from local Claude Code sessions.",
   "author": {
     "name": "hvoguetech",
