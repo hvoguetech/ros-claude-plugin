@@ -19,13 +19,14 @@ import (
 )
 
 type harness struct {
-	t          *testing.T
-	srv        *fakeros.Server
-	repo       string
-	env        map[string]string
-	spawns     [][]string
-	exec       func(dir string, argv []string) error
-	runProgram func(ctx context.Context, dir string, argv []string) (string, error)
+	t           *testing.T
+	srv         *fakeros.Server
+	repo        string
+	env         map[string]string
+	spawns      [][]string
+	exec        func(dir string, argv []string) error
+	runProgram  func(ctx context.Context, dir string, argv []string) (string, error)
+	httpTimeout time.Duration // the App's per-request timeout (default 5 s)
 }
 
 func newHarness(t *testing.T) *harness {
@@ -58,8 +59,13 @@ func (h *harness) run(stdin string, args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
 	a := &App{Version: "0.1.0", Stdin: strings.NewReader(stdin), Stdout: &out, Stderr: &errb,
 		Getenv: func(k string) string { return h.env[k] }, Getwd: func() (string, error) { return h.repo, nil },
-		HTTPTimeout: 5 * time.Second,
-		Spawn:       func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
+		HTTPTimeout: func() time.Duration {
+			if h.httpTimeout > 0 {
+				return h.httpTimeout
+			}
+			return 5 * time.Second
+		}(),
+		Spawn: func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
 		Exec: func(dir string, argv []string) error {
 			if h.exec != nil {
 				return h.exec(dir, argv)

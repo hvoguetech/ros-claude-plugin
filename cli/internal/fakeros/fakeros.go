@@ -83,6 +83,7 @@ type Server struct {
 	// peers
 	MCPCalls    []map[string]any   // tools/call params on /v1/mcp/me (name + arguments)
 	WaitPages   [][]map[string]any // scripted answers to GET …/peers/wait, in order; then empty pages
+	WaitDelay   time.Duration      // how long an empty wait page takes (a long-poll)
 	PeerSummary map[string]any     // GET …/peers/summary body (nil = nothing pending)
 }
 
@@ -564,7 +565,11 @@ func (s *Server) peersWait(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Mu.Unlock()
 	if page == nil {
-		time.Sleep(20 * time.Millisecond) // "timeout" in miniature
+		delay := s.WaitDelay
+		if delay == 0 {
+			delay = 20 * time.Millisecond // "timeout" in miniature
+		}
+		time.Sleep(delay)
 		writeJSON(w, 200, map[string]any{"messages": []any{}, "next_cursor": nil})
 		return
 	}

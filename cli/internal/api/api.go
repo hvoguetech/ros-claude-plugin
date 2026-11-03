@@ -634,8 +634,19 @@ func (c *Client) PeersWait(ctx context.Context, runID string, after, timeout int
 	if err != nil {
 		return nil, err
 	}
+	// A long-poll outlives the client's usual per-request timeout: give this call the poll's own budget plus slack.
+	long := *c.HTTP
+	long.Timeout = time.Duration(timeout+15) * time.Second
+	resp, err := long.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, decodeError(resp)
+	}
 	var out PeerPage
-	if err := c.doJSON(req, &out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return &out, nil

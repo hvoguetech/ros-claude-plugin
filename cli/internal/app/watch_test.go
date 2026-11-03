@@ -126,3 +126,19 @@ func TestPromptHookSurfacesWaitingPeerMessages(t *testing.T) {
 		t.Fatalf("code %d out %q", code, out)
 	}
 }
+
+func TestWatchLongPollOutlivesTheRequestTimeout(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	h.httpTimeout = 300 * time.Millisecond   // the usual per-request budget…
+	h.srv.WaitDelay = 900 * time.Millisecond // …which an empty long-poll exceeds, and must not trip
+	h.srv.WaitPages = [][]map[string]any{nil, {request("m3", "ping", 3)}}
+	h.runProgram = func(context.Context, string, []string) (string, error) { return "pong", nil }
+	code, _, errb := h.run("", "watch", "--once", "--dir", h.repo)
+	if code != 0 || strings.Contains(errb, "retrying") {
+		t.Fatalf("code %d: %s", code, errb)
+	}
+	if reply := h.mcpCall("peer_reply"); reply == nil || reply["text"] != "pong" {
+		t.Fatalf("reply %v", reply)
+	}
+}
