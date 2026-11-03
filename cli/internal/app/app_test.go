@@ -2,7 +2,9 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,12 +19,13 @@ import (
 )
 
 type harness struct {
-	t      *testing.T
-	srv    *fakeros.Server
-	repo   string
-	env    map[string]string
-	spawns [][]string
-	exec   func(dir string, argv []string) error
+	t          *testing.T
+	srv        *fakeros.Server
+	repo       string
+	env        map[string]string
+	spawns     [][]string
+	exec       func(dir string, argv []string) error
+	runProgram func(ctx context.Context, dir string, argv []string) (string, error)
 }
 
 func newHarness(t *testing.T) *harness {
@@ -57,7 +60,18 @@ func (h *harness) run(stdin string, args ...string) (int, string, string) {
 		Getenv: func(k string) string { return h.env[k] }, Getwd: func() (string, error) { return h.repo, nil },
 		HTTPTimeout: 5 * time.Second,
 		Spawn:       func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
-		Exec:        func(dir string, argv []string) error { if h.exec != nil { return h.exec(dir, argv) }; return nil }}
+		Exec: func(dir string, argv []string) error {
+			if h.exec != nil {
+				return h.exec(dir, argv)
+			}
+			return nil
+		},
+		RunProgram: func(ctx context.Context, dir string, argv []string) (string, error) {
+			if h.runProgram != nil {
+				return h.runProgram(ctx, dir, argv)
+			}
+			return "", errors.New("no programs run in tests")
+		}}
 	code := a.Run(args)
 	return code, out.String(), errb.String()
 }

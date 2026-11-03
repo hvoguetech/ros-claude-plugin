@@ -116,6 +116,24 @@ agent continues from that branch on the warm devbox and its questions and result
 skips the commit and push when the branch is already on the remote. Needs the `tasks:write` scope (granted at sign-in)
 and the right to create tasks in the project.
 
+## Agents and your machine as peers
+
+- **Ask an agent from a session.** The session-start banner's `<ros-peers>` block names the ROS agents you may
+  message. Write `@Reviewer check this diff` and Claude calls `peer_ask`, which asks the agent and brings its answer
+  back in one call (a late answer surfaces on your next prompt, through the `UserPromptSubmit` hook). The agents an
+  admin exposes under Peers in ROS, and your own permission to message them, decide who is reachable.
+- **Let agents ask your machine.** In a linked repository:
+
+  ```bash
+  ros-local watch --name "Marut's laptop"      # --permission-mode acceptEdits to let it edit files
+  ```
+
+  It opens a local session, joins it as an open peer (any agent in the project may send it requests for a day),
+  and answers each request by running `claude -p` headless in that repository, replying with the output. A ROS
+  agent reaches it like any other agent: `@Marut's laptop does the build pass on your machine?`. Nothing on the
+  server ever starts a process here — the watcher pulls. `--once` answers one request and exits; `--max-turns`
+  and `--answer-timeout` bound each answer.
+
 ## `ros-local` commands
 
 | Command | What it does |
@@ -128,7 +146,8 @@ and the right to create tasks in the project.
 | `ros-local pickup <run id or console URL> [--dir DIR] [--no-claude] [--force]` | Continue a cloud run on this machine: unpack its workspace snapshot (or clone its repositories) into `~/ros/<run folder>`, save the briefing as `ROS-PICKUP.md`, record the pickup on the run, and start Claude Code there with the briefing as the first message. |
 | `ros-local send --message "…" [--title T] [--branch B] [--no-push] [--project ID]` | Hand this repo's work to a cloud agent: commits uncommitted changes on a new `ros/handoff-<time>` branch, pushes it with your git credentials, and creates a task on the repo's ROS project with your note. `/ros:send` in Claude Code writes the note for you. |
 | `ros-local mcp-headers --project-dir DIR` | Used by the plugin: prints the MCP auth and project headers. |
-| `ros-local hook session-start` / `session-end` | Used by the plugin's hooks. |
+| `ros-local watch [--dir REPO] [--name "…"] [--once] [--permission-mode M] [--max-turns N] [--answer-timeout D]` | Make this machine a peer that ROS agents can ask (by default "<you>'s laptop"): each request is answered by a headless Claude Code run in the repository and sent back as the reply. Ctrl-C stops it. |
+| `ros-local hook session-start` / `session-end` / `user-prompt-submit` | Used by the plugin's hooks. |
 
 State lives in `~/.ros/` (override with `ROS_HOME`).
 

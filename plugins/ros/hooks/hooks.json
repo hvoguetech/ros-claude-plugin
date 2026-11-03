@@ -1,5 +1,5 @@
 {
-  "description": "ROS: open the local session, sync skills and recall memory at start; end the session at exit.",
+  "description": "ROS: open the local session, sync skills and recall memory at start; surface waiting peer messages before a prompt; end the session at exit.",
   "hooks": {
     "SessionStart": [
       {
@@ -8,6 +8,17 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook session-start",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook user-prompt-submit",
+            "timeout": 5
           }
         ]
       }

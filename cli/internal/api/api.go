@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -565,6 +566,104 @@ type TaskResult struct {
 func (c *Client) CreateTask(ctx context.Context, in *TaskRequest) (*TaskResult, error) {
 	var out TaskResult
 	if err := c.postJSON(ctx, "/v1/local/tasks", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// --- peers: /v1/mcp/me tool calls and the inbox long-poll (services/peer_messaging/local_peer.py) --------
+
+// MCPCall calls one tool on `/v1/mcp/me` (plain JSON-RPC) and returns its text — JSON for the peer tools.
+func (c *Client) MCPCall(ctx context.Context, name string, args map[string]any) (string, error) {
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": name, "arguments": args}}
+	var out struct {
+		Result *struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := c.postJSON(ctx, "/v1/mcp/me", body, &out); err != nil {
+		return "", err
+	}
+	if out.Error != nil {
+		return "", fmt.Errorf("%s: %s", name, out.Error.Message)
+	}
+	if out.Result == nil {
+		return "", fmt.Errorf("%s: empty result", name)
+	}
+	text := ""
+	if len(out.Result.Content) > 0 {
+		text = out.Result.Content[0].Text
+	}
+	if out.Result.IsError {
+		return "", fmt.Errorf("%s: %s", name, text)
+	}
+	return text, nil
+}
+
+// PeerMessage is one inbox row (local_peer.inbox / wait_inbox).
+type PeerMessage struct {
+	MessageID    string `json:"message_id"`
+	SenderTaskID string `json:"sender_task_id"`
+	Kind         string `json:"kind"` // request | note | reply
+	Body         struct {
+		Text string         `json:"text"`
+		Data map[string]any `json:"data"`
+	} `json:"body"`
+	Sequence   int    `json:"sequence"`
+	ResponseTo string `json:"response_to"`
+}
+
+type PeerPage struct {
+	Messages   []PeerMessage `json:"messages"`
+	NextCursor *int          `json:"next_cursor"`
+}
+
+// PeersWait long-polls a session's peer inbox (`GET /v1/local/sessions/{id}/peers/wait`).
+func (c *Client) PeersWait(ctx context.Context, runID string, after, timeout int) (*PeerPage, error) {
+	q := url.Values{"after": {strconv.Itoa(after)}, "timeout": {strconv.Itoa(timeout)}}
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/local/sessions/"+url.PathEscape(runID)+"/peers/wait", q, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out PeerPage
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PeerSummary is `GET /v1/local/sessions/{id}/peers/summary` (pending is a count, or "5+").
+type PeerSummary struct {
+	Pending json.RawMessage `json:"pending"`
+	Latest  []struct {
+		MessageID string `json:"message_id"`
+		From      string `json:"from"`
+		Kind      string `json:"kind"`
+		Preview   string `json:"preview"`
+	} `json:"latest"`
+}
+
+// PendingText renders the pending count ("0", "3", "5+").
+func (s *PeerSummary) PendingText() string {
+	return strings.Trim(strings.TrimSpace(string(s.Pending)), `"`)
+}
+
+func (c *Client) PeersSummary(ctx context.Context, runID string) (*PeerSummary, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/local/sessions/"+url.PathEscape(runID)+"/peers/summary", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out PeerSummary
+	if err := c.doJSON(req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

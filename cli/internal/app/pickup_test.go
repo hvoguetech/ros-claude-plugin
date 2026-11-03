@@ -39,8 +39,8 @@ func (h *harness) pickupRun() {
 	h.srv.Artifacts["a1"] = tarGz(h.t, map[string]string{"shop/README.md": "# shop\n", "shop/.git/HEAD": "ref: refs/heads/fix/login\n"})
 	h.srv.Pickups["r1"] = map[string]any{
 		"run_id": "r1", "status": "interrupted", "project_id": "p1", "workflow_name": "Coder",
-		"snapshot": map[string]any{"artifact_id": "a1", "filename": "workspace.tar.gz", "size": 4096, "taken_at": "2026-11-03T10:00:00Z", "url": "/v1/local/artifacts/a1"},
-		"repos":    []any{map[string]any{"full_name": "acme/shop", "url": "https://github.com/acme/shop", "branch": "fix/login"}},
+		"snapshot":      map[string]any{"artifact_id": "a1", "filename": "workspace.tar.gz", "size": 4096, "taken_at": "2026-11-03T10:00:00Z", "url": "/v1/local/artifacts/a1"},
+		"repos":         []any{map[string]any{"full_name": "acme/shop", "url": "https://github.com/acme/shop", "branch": "fix/login"}},
 		"pull_requests": []any{}, "question": "which vault?", "report": "Patched auth.py.", "folder": "ros-r1",
 		"steps": []any{"mkdir -p ~/ros-r1"}, "cli": "ros-local pickup r1", "briefing": briefing,
 	}
