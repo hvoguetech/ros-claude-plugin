@@ -35,6 +35,8 @@ type App struct {
 	Spawn func(args ...string) error
 	// LoginSleep replaces the device-flow poll wait (tests).
 	LoginSleep func(ctx context.Context, d time.Duration) error
+	// Exec replaces this process with a program in a directory (`pickup` starting Claude Code); nil = the real exec.
+	Exec func(dir string, argv []string) error
 }
 
 // New returns the App for the real process.
@@ -57,6 +59,8 @@ Usage:
   ros-local capture [metadata|prompts|full]                   what your local traces carry (asks before raising)
   ros-local share | private                                   this repo's current session: shared or private
   ros-local remember-session                                  save this repo's current session to your memory
+  ros-local pickup <run id or URL> [--dir DIR] [--no-claude]  continue a cloud run here: unpack its files, start Claude Code
+  ros-local send --message "…" [--branch B] [--no-push]       hand this repo's work to a cloud agent as a task
   ros-local version
 
 Called by the plugin (not by hand):
@@ -85,6 +89,10 @@ func (a *App) Run(args []string) int {
 		return a.sync(rest)
 	case "status":
 		return a.status(rest)
+	case "pickup":
+		return a.pickup(rest)
+	case "send":
+		return a.send(rest)
 	case "mcp-headers":
 		return a.mcpHeaders(rest)
 	case "flush":
