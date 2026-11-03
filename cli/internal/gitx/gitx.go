@@ -170,3 +170,19 @@ func RepoKey(remote string) string {
 	}
 	return strings.ToLower(host + "/" + path)
 }
+
+// Dirty reports uncommitted changes (staged, unstaged or untracked) in the working tree.
+func (r *Repo) Dirty(ctx context.Context) bool {
+	return r.git(ctx, "status", "--porcelain", "--untracked-files=normal") != ""
+}
+
+// FullName is the `owner/name` of a remote (what GitHub-style APIs call a repository), or "" when the
+// remote isn't of that shape (a local path, say).
+func FullName(remote string) string {
+	key := RepoKey(remote)
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 || !strings.Contains(parts[1], "/") {
+		return ""
+	}
+	return parts[1]
+}

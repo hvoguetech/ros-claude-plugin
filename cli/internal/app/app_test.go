@@ -22,6 +22,7 @@ type harness struct {
 	repo   string
 	env    map[string]string
 	spawns [][]string
+	exec   func(dir string, argv []string) error
 }
 
 func newHarness(t *testing.T) *harness {
@@ -55,7 +56,8 @@ func (h *harness) run(stdin string, args ...string) (int, string, string) {
 	a := &App{Version: "0.1.0", Stdin: strings.NewReader(stdin), Stdout: &out, Stderr: &errb,
 		Getenv: func(k string) string { return h.env[k] }, Getwd: func() (string, error) { return h.repo, nil },
 		HTTPTimeout: 5 * time.Second,
-		Spawn:       func(args ...string) error { h.spawns = append(h.spawns, args); return nil }}
+		Spawn:       func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
+		Exec:        func(dir string, argv []string) error { if h.exec != nil { return h.exec(dir, argv) }; return nil }}
 	code := a.Run(args)
 	return code, out.String(), errb.String()
 }

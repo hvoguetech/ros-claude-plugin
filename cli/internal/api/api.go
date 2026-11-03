@@ -455,3 +455,117 @@ func (c *Client) SkillsBundle(ctx context.Context, projectID, repo string, names
 	}
 	return b, nil
 }
+
+// --- pick up / send (routers/local_pickup.py) ---------------------------------------------------------
+
+// PickupSnapshot is the conversation's latest workspace snapshot and where to fetch it (a /v1/local path).
+type PickupSnapshot struct {
+	ArtifactID string `json:"artifact_id"`
+	Filename   string `json:"filename"`
+	Size       int64  `json:"size"`
+	TakenAt    string `json:"taken_at"`
+	URL        string `json:"url"`
+}
+
+type PickupRepo struct {
+	FullName string `json:"full_name"`
+	URL      string `json:"url"`
+	Branch   string `json:"branch"`
+}
+
+type PickupPR struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
+// Pickup is `GET /v1/local/runs/{id}/pickup`: what continuing a cloud run on this machine needs.
+type Pickup struct {
+	RunID        string          `json:"run_id"`
+	ThreadID     string          `json:"thread_id"`
+	Status       string          `json:"status"`
+	ProjectID    string          `json:"project_id"`
+	WorkflowName string          `json:"workflow_name"`
+	Snapshot     *PickupSnapshot `json:"snapshot"`
+	Repos        []PickupRepo    `json:"repos"`
+	PullRequests []PickupPR      `json:"pull_requests"`
+	Question     string          `json:"question"`
+	Report       string          `json:"report"`
+	Folder       string          `json:"folder"`
+	Steps        []string        `json:"steps"`
+	CLI          string          `json:"cli"`
+	Briefing     string          `json:"briefing"`
+	PickedUp     map[string]any  `json:"picked_up"`
+}
+
+func (c *Client) RunPickup(ctx context.Context, runID string) (*Pickup, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/local/runs/"+url.PathEscape(runID)+"/pickup", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out Pickup
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// MarkPickup records on the run that it was picked up here (`POST /v1/local/runs/{id}/pickup`).
+func (c *Client) MarkPickup(ctx context.Context, runID, machine, folder string) error {
+	body := map[string]any{}
+	if machine != "" {
+		body["machine"] = machine
+	}
+	if folder != "" {
+		body["folder"] = folder
+	}
+	return c.postJSON(ctx, "/v1/local/runs/"+url.PathEscape(runID)+"/pickup", body, nil)
+}
+
+// Download streams the body of an authenticated GET (an artifact's bytes). The caller closes it.
+func (c *Client) Download(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
+		return nil, 0, decodeError(resp)
+	}
+	return resp.Body, resp.ContentLength, nil
+}
+
+type TaskLink struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+}
+
+// TaskRequest is `POST /v1/local/tasks` (`ros-local send`).
+type TaskRequest struct {
+	ProjectID     string            `json:"project_id,omitempty"`
+	Repo          string            `json:"repo,omitempty"`
+	Message       string            `json:"message"`
+	Title         string            `json:"title,omitempty"`
+	RepoFullNames []string          `json:"repo_full_names,omitempty"`
+	RepoBranches  map[string]string `json:"repo_branches,omitempty"`
+	Links         []TaskLink        `json:"links,omitempty"`
+}
+
+type TaskResult struct {
+	TaskID    string `json:"task_id"`
+	ProjectID string `json:"project_id"`
+	Status    string `json:"status"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+}
+
+func (c *Client) CreateTask(ctx context.Context, in *TaskRequest) (*TaskResult, error) {
+	var out TaskResult
+	if err := c.postJSON(ctx, "/v1/local/tasks", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

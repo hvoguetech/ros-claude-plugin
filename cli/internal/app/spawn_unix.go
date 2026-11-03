@@ -30,6 +30,19 @@ func spawnDetached(args ...string) error {
 	return cmd.Process.Release()
 }
 
+// execProgram replaces this process with argv[0] run in dir (so Claude Code owns the terminal and exits with
+// its own status).
+func execProgram(dir string, argv []string) error {
+	path, err := exec.LookPath(argv[0])
+	if err != nil {
+		return err
+	}
+	if err := os.Chdir(dir); err != nil {
+		return err
+	}
+	return syscall.Exec(path, argv, os.Environ())
+}
+
 func openBrowser(url string) error {
 	name := "xdg-open"
 	if runtime.GOOS == "darwin" {
