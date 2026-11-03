@@ -37,6 +37,8 @@ type App struct {
 	LoginSleep func(ctx context.Context, d time.Duration) error
 	// Exec replaces this process with a program in a directory (`pickup` starting Claude Code); nil = the real exec.
 	Exec func(dir string, argv []string) error
+	// RunProgram runs a program in a directory and returns its stdout (`watch` answering with Claude Code); nil = real.
+	RunProgram func(ctx context.Context, dir string, argv []string) (string, error)
 }
 
 // New returns the App for the real process.
@@ -58,11 +60,12 @@ Usage:
   ros-local logout                                            forget this device's tokens
   ros-local pickup <run id or URL> [--dir DIR] [--no-claude]  continue a cloud run here: unpack its files, start Claude Code
   ros-local send --message "…" [--branch B] [--no-push]       hand this repo's work to a cloud agent as a task
+  ros-local watch [--dir REPO] [--name "…"] [--once]          answer agents that ask this machine (Claude Code, headless)
   ros-local version
 
 Called by the plugin (not by hand):
   ros-local mcp-headers --project-dir DIR                     MCP headersHelper
-  ros-local hook session-start | session-end                  Claude Code hooks
+  ros-local hook session-start | session-end | user-prompt-submit   Claude Code hooks
 `
 
 // Run executes one command and returns the exit code.
@@ -87,6 +90,8 @@ func (a *App) Run(args []string) int {
 		return a.pickup(rest)
 	case "send":
 		return a.send(rest)
+	case "watch":
+		return a.watch(rest)
 	case "mcp-headers":
 		return a.mcpHeaders(rest)
 	case "hook":

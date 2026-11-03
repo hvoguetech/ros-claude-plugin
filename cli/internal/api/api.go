@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -338,20 +339,20 @@ type Policy struct {
 // Session is the `POST /v1/local/sessions` answer. MinPluginVersion / MinCLIVersion (spec §13a) are read
 // when present: below them, ROS is off for the session and the banner says what to update.
 type Session struct {
-	RunID              string    `json:"run_id"`
-	ThreadID           string    `json:"thread_id"`
-	ProjectID          string    `json:"project_id"`
-	ProjectName        string    `json:"project_name"`
-	Reopened           bool      `json:"reopened"`
-	RunToken           string    `json:"run_token"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	Context            string    `json:"context"`
-	Recall             *Recall   `json:"recall"`
-	SkillsManifestETag *string   `json:"skills_manifest_etag"`
-	Policy             *Policy   `json:"policy"`
-	TraceURL           string    `json:"trace_url"`
-	MinPluginVersion   string    `json:"min_plugin_version,omitempty"`
-	MinCLIVersion      string    `json:"min_cli_version,omitempty"`
+	RunID              string  `json:"run_id"`
+	ThreadID           string  `json:"thread_id"`
+	ProjectID          string  `json:"project_id"`
+	ProjectName        string  `json:"project_name"`
+	Reopened           bool    `json:"reopened"`
+	RunToken           string  `json:"run_token"`
+	ExpiresAt          Stamp   `json:"expires_at"`
+	Context            string  `json:"context"`
+	Recall             *Recall `json:"recall"`
+	SkillsManifestETag *string `json:"skills_manifest_etag"`
+	Policy             *Policy `json:"policy"`
+	TraceURL           string  `json:"trace_url"`
+	MinPluginVersion   string  `json:"min_plugin_version,omitempty"`
+	MinCLIVersion      string  `json:"min_cli_version,omitempty"`
 }
 
 func (c *Client) OpenSession(ctx context.Context, in *SessionRequest) (*Session, error) {
@@ -568,4 +569,135 @@ func (c *Client) CreateTask(ctx context.Context, in *TaskRequest) (*TaskResult, 
 		return nil, err
 	}
 	return &out, nil
+}
+
+// --- peers: /v1/mcp/me tool calls and the inbox long-poll (services/peer_messaging/local_peer.py) --------
+
+// MCPCall calls one tool on `/v1/mcp/me` (plain JSON-RPC) and returns its text — JSON for the peer tools.
+func (c *Client) MCPCall(ctx context.Context, name string, args map[string]any) (string, error) {
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": name, "arguments": args}}
+	var out struct {
+		Result *struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := c.postJSON(ctx, "/v1/mcp/me", body, &out); err != nil {
+		return "", err
+	}
+	if out.Error != nil {
+		return "", fmt.Errorf("%s: %s", name, out.Error.Message)
+	}
+	if out.Result == nil {
+		return "", fmt.Errorf("%s: empty result", name)
+	}
+	text := ""
+	if len(out.Result.Content) > 0 {
+		text = out.Result.Content[0].Text
+	}
+	if out.Result.IsError {
+		return "", fmt.Errorf("%s: %s", name, text)
+	}
+	return text, nil
+}
+
+// PeerMessage is one inbox row (local_peer.inbox / wait_inbox).
+type PeerMessage struct {
+	MessageID    string `json:"message_id"`
+	SenderTaskID string `json:"sender_task_id"`
+	Kind         string `json:"kind"` // request | note | reply
+	Body         struct {
+		Text string         `json:"text"`
+		Data map[string]any `json:"data"`
+	} `json:"body"`
+	Sequence   int    `json:"sequence"`
+	ResponseTo string `json:"response_to"`
+}
+
+type PeerPage struct {
+	Messages   []PeerMessage `json:"messages"`
+	NextCursor *int          `json:"next_cursor"`
+}
+
+// PeersWait long-polls a session's peer inbox (`GET /v1/local/sessions/{id}/peers/wait`).
+func (c *Client) PeersWait(ctx context.Context, runID string, after, timeout int) (*PeerPage, error) {
+	q := url.Values{"after": {strconv.Itoa(after)}, "timeout": {strconv.Itoa(timeout)}}
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/local/sessions/"+url.PathEscape(runID)+"/peers/wait", q, nil)
+	if err != nil {
+		return nil, err
+	}
+	// A long-poll outlives the client's usual per-request timeout: give this call the poll's own budget plus slack.
+	long := *c.HTTP
+	long.Timeout = time.Duration(timeout+15) * time.Second
+	resp, err := long.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, decodeError(resp)
+	}
+	var out PeerPage
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PeerSummary is `GET /v1/local/sessions/{id}/peers/summary` (pending is a count, or "5+").
+type PeerSummary struct {
+	Pending json.RawMessage `json:"pending"`
+	Latest  []struct {
+		MessageID string `json:"message_id"`
+		From      string `json:"from"`
+		Kind      string `json:"kind"`
+		Preview   string `json:"preview"`
+	} `json:"latest"`
+}
+
+// PendingText renders the pending count ("0", "3", "5+").
+func (s *PeerSummary) PendingText() string {
+	return strings.Trim(strings.TrimSpace(string(s.Pending)), `"`)
+}
+
+func (c *Client) PeersSummary(ctx context.Context, runID string) (*PeerSummary, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/v1/local/sessions/"+url.PathEscape(runID)+"/peers/summary", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out PeerSummary
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Stamp is a time the backend sends as RFC 3339, or — from an older server — as a naive UTC datetime with no
+// offset ("2026-11-03T10:59:05.664194"). Either parses; the zero value is an empty string.
+type Stamp struct{ time.Time }
+
+func (s *Stamp) UnmarshalJSON(b []byte) error {
+	var raw string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if raw == "" {
+		s.Time = time.Time{}
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			s.Time = t.UTC()
+			return nil
+		}
+	}
+	return fmt.Errorf("unrecognised time %q", raw)
 }

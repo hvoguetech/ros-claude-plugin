@@ -32,6 +32,7 @@ type Server struct {
 	Mu sync.Mutex
 
 	// device flow
+	DropPolls     int    // token polls answered by closing the connection without a response (a stale keep-alive)
 	PendingPolls  int    // authorization_pending answers before approval
 	SlowDownPolls int    // slow_down answers (sent first)
 	DenyLogin     bool   // answer access_denied
@@ -55,6 +56,7 @@ type Server struct {
 	NoProject           bool              // nothing resolves when no project is named: 404 no_project
 	MinPluginVersion    string
 	MinCLIVersion       string
+	NaiveExpiry         bool // answer sessions with a naive UTC expires_at (older backends)
 
 	// /v1/local
 	Projects       map[string]string // id → name
@@ -77,6 +79,12 @@ type Server struct {
 	Artifacts   map[string][]byte         // artifact id → bytes
 	PickupMarks []map[string]any          // POST /v1/local/runs/{id}/pickup bodies (+ "run_id")
 	Tasks       []map[string]any          // POST /v1/local/tasks bodies
+
+	// peers
+	MCPCalls    []map[string]any   // tools/call params on /v1/mcp/me (name + arguments)
+	WaitPages   [][]map[string]any // scripted answers to GET …/peers/wait, in order; then empty pages
+	WaitDelay   time.Duration      // how long an empty wait page takes (a long-poll)
+	PeerSummary map[string]any     // GET …/peers/summary body (nil = nothing pending)
 }
 
 // New starts a fake with one project and an empty skill set.
@@ -88,7 +96,7 @@ func New() *Server {
 		validTokens:  map[string]bool{},
 		spentRefresh: map[string]bool{}, liveRefresh: map[string]bool{"refresh-1": true},
 		UnavailableProjects: map[string]string{},
-		Pickups: map[string]map[string]any{}, Artifacts: map[string][]byte{},
+		Pickups:             map[string]map[string]any{}, Artifacts: map[string][]byte{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/oauth/device_authorization", s.deviceAuthorization)
@@ -102,6 +110,9 @@ func New() *Server {
 	mux.HandleFunc("POST /v1/local/runs/{id}/pickup", s.auth(s.markPickup))
 	mux.HandleFunc("GET /v1/local/artifacts/{id}", s.auth(s.artifact))
 	mux.HandleFunc("POST /v1/local/tasks", s.auth(s.createTask))
+	mux.HandleFunc("POST /v1/mcp/me", s.auth(s.mcp))
+	mux.HandleFunc("GET /v1/local/sessions/{id}/peers/wait", s.auth(s.peersWait))
+	mux.HandleFunc("GET /v1/local/sessions/{id}/peers/summary", s.auth(s.peersSummary))
 	s.Server = httptest.NewServer(mux)
 	return s
 }
@@ -162,6 +173,20 @@ func (s *Server) deviceAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
+	s.Mu.Lock()
+	drop := s.DropPolls > 0
+	if drop {
+		s.DropPolls--
+	}
+	s.Mu.Unlock()
+	if drop {
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				conn.Close() // the client sees EOF, as from a keep-alive the server closed
+				return
+			}
+		}
+	}
 	_ = r.ParseForm()
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -322,7 +347,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 	etag := s.etagLocked()
 	writeJSON(w, 201, map[string]any{
 		"run_id": fmt.Sprintf("run-%d", len(s.Sessions)), "thread_id": "t1", "project_id": pid,
-		"project_name": s.Projects[pid], "reopened": false, "run_token": "rt", "expires_at": time.Now().Add(time.Hour),
+		"project_name": s.Projects[pid], "reopened": false, "run_token": "rt", "expires_at": s.expiryLocked(),
 		"context": s.Context, "recall": map[string]any{"profile": "personal_agent", "counts": map[string]int{},
 			"dropped": 0, "item_ids": []string{"m1", "m2"}},
 		"skills_manifest_etag": etag,
@@ -490,4 +515,83 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	title, _ := body["title"].(string)
 	writeJSON(w, 201, map[string]any{"task_id": id, "project_id": pid, "status": "queued", "title": title,
 		"url": s.URL + "/?project=" + pid + "&screen=tasks&task=" + id})
+}
+
+// --- peers --------------------------------------------------------------------------------------------
+
+func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID     any    `json:"id"`
+		Method string `json:"method"`
+		Params struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		} `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Method != "tools/call" {
+		writeJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": -32601, "message": "method not found"}})
+		return
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	s.MCPCalls = append(s.MCPCalls, map[string]any{"name": body.Params.Name, "arguments": body.Params.Arguments})
+	var result any
+	isError := false
+	switch body.Params.Name {
+	case "peer_join":
+		result = map[string]any{"session": body.Params.Arguments["session"], "task_id": "task-" + fmt.Sprint(len(s.MCPCalls)),
+			"generation": 1, "name": body.Params.Arguments["title"], "open_until": "2099-01-01T00:00:00Z",
+			"delivery": "mailbox"}
+	case "peer_ack":
+		result = map[string]any{"applied": body.Params.Arguments["message_ids"]}
+	case "peer_reply":
+		result = map[string]any{"message_id": "reply-" + fmt.Sprint(len(s.MCPCalls)), "request_id": body.Params.Arguments["request_id"]}
+	default:
+		result, isError = "unknown tool "+body.Params.Name, true
+	}
+	text, _ := json.Marshal(result)
+	if isError {
+		text = []byte(result.(string))
+	}
+	writeJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": body.ID,
+		"result": map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}, "isError": isError}})
+}
+
+func (s *Server) peersWait(w http.ResponseWriter, r *http.Request) {
+	s.Mu.Lock()
+	var page []map[string]any
+	if len(s.WaitPages) > 0 {
+		page, s.WaitPages = s.WaitPages[0], s.WaitPages[1:]
+	}
+	s.Mu.Unlock()
+	if page == nil {
+		delay := s.WaitDelay
+		if delay == 0 {
+			delay = 20 * time.Millisecond // "timeout" in miniature
+		}
+		time.Sleep(delay)
+		writeJSON(w, 200, map[string]any{"messages": []any{}, "next_cursor": nil})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"messages": page, "next_cursor": nil})
+}
+
+func (s *Server) peersSummary(w http.ResponseWriter, r *http.Request) {
+	s.Mu.Lock()
+	body := s.PeerSummary
+	s.Mu.Unlock()
+	if body == nil {
+		body = map[string]any{"pending": 0, "latest": []any{}}
+	}
+	writeJSON(w, 200, body)
+}
+
+// expiryLocked is the session's expires_at: RFC 3339, or a naive UTC stamp when NaiveExpiry is set (an older
+// backend's datetime.utcnow()).
+func (s *Server) expiryLocked() any {
+	t := time.Now().Add(time.Hour)
+	if s.NaiveExpiry {
+		return t.UTC().Format("2006-01-02T15:04:05.999999")
+	}
+	return t
 }

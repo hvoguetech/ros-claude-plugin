@@ -2,7 +2,9 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,12 +19,14 @@ import (
 )
 
 type harness struct {
-	t      *testing.T
-	srv    *fakeros.Server
-	repo   string
-	env    map[string]string
-	spawns [][]string
-	exec   func(dir string, argv []string) error
+	t           *testing.T
+	srv         *fakeros.Server
+	repo        string
+	env         map[string]string
+	spawns      [][]string
+	exec        func(dir string, argv []string) error
+	runProgram  func(ctx context.Context, dir string, argv []string) (string, error)
+	httpTimeout time.Duration // the App's per-request timeout (default 5 s)
 }
 
 func newHarness(t *testing.T) *harness {
@@ -55,9 +59,25 @@ func (h *harness) run(stdin string, args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
 	a := &App{Version: "0.1.0", Stdin: strings.NewReader(stdin), Stdout: &out, Stderr: &errb,
 		Getenv: func(k string) string { return h.env[k] }, Getwd: func() (string, error) { return h.repo, nil },
-		HTTPTimeout: 5 * time.Second,
-		Spawn:       func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
-		Exec:        func(dir string, argv []string) error { if h.exec != nil { return h.exec(dir, argv) }; return nil }}
+		HTTPTimeout: func() time.Duration {
+			if h.httpTimeout > 0 {
+				return h.httpTimeout
+			}
+			return 5 * time.Second
+		}(),
+		Spawn: func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
+		Exec: func(dir string, argv []string) error {
+			if h.exec != nil {
+				return h.exec(dir, argv)
+			}
+			return nil
+		},
+		RunProgram: func(ctx context.Context, dir string, argv []string) (string, error) {
+			if h.runProgram != nil {
+				return h.runProgram(ctx, dir, argv)
+			}
+			return "", errors.New("no programs run in tests")
+		}}
 	code := a.Run(args)
 	return code, out.String(), errb.String()
 }
@@ -484,5 +504,20 @@ func TestSessionStartRefreshRefusedDisabled(t *testing.T) {
 	}
 	if c, err := (config.FileStore{}).Get(h.srv.URL); err != nil || c.RefreshToken != "refresh-1" {
 		t.Fatal("refresh token dropped")
+	}
+}
+
+func TestSessionStartAcceptsANaiveExpiry(t *testing.T) {
+	// Older backends answer expires_at without an offset; the hook must still open the session, not go "offline".
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	h.srv.NaiveExpiry = true
+	code, out, _ := h.run(`{"session_id":"sess-n","source":"startup","cwd":"`+h.repo+`"}`, "hook", "session-start")
+	o := decodeHook(t, out)
+	if code != 0 || !strings.HasPrefix(o.SystemMessage, `ROS · project "Payments"`) {
+		t.Fatalf("code %d banner %q", code, o.SystemMessage)
+	}
+	if len(h.srv.Sessions) != 1 {
+		t.Fatalf("sessions %d", len(h.srv.Sessions))
 	}
 }
