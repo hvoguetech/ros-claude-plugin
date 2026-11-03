@@ -32,6 +32,7 @@ type Server struct {
 	Mu sync.Mutex
 
 	// device flow
+	DropPolls     int    // token polls answered by closing the connection without a response (a stale keep-alive)
 	PendingPolls  int    // authorization_pending answers before approval
 	SlowDownPolls int    // slow_down answers (sent first)
 	DenyLogin     bool   // answer access_denied
@@ -55,6 +56,7 @@ type Server struct {
 	NoProject           bool              // nothing resolves when no project is named: 404 no_project
 	MinPluginVersion    string
 	MinCLIVersion       string
+	NaiveExpiry         bool // answer sessions with a naive UTC expires_at (older backends)
 
 	// /v1/local
 	Projects       map[string]string // id → name
@@ -170,6 +172,20 @@ func (s *Server) deviceAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
+	s.Mu.Lock()
+	drop := s.DropPolls > 0
+	if drop {
+		s.DropPolls--
+	}
+	s.Mu.Unlock()
+	if drop {
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				conn.Close() // the client sees EOF, as from a keep-alive the server closed
+				return
+			}
+		}
+	}
 	_ = r.ParseForm()
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -330,7 +346,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 	etag := s.etagLocked()
 	writeJSON(w, 201, map[string]any{
 		"run_id": fmt.Sprintf("run-%d", len(s.Sessions)), "thread_id": "t1", "project_id": pid,
-		"project_name": s.Projects[pid], "reopened": false, "run_token": "rt", "expires_at": time.Now().Add(time.Hour),
+		"project_name": s.Projects[pid], "reopened": false, "run_token": "rt", "expires_at": s.expiryLocked(),
 		"context": s.Context, "recall": map[string]any{"profile": "personal_agent", "counts": map[string]int{},
 			"dropped": 0, "item_ids": []string{"m1", "m2"}},
 		"skills_manifest_etag": etag,
@@ -563,4 +579,14 @@ func (s *Server) peersSummary(w http.ResponseWriter, r *http.Request) {
 		body = map[string]any{"pending": 0, "latest": []any{}}
 	}
 	writeJSON(w, 200, body)
+}
+
+// expiryLocked is the session's expires_at: RFC 3339, or a naive UTC stamp when NaiveExpiry is set (an older
+// backend's datetime.utcnow()).
+func (s *Server) expiryLocked() any {
+	t := time.Now().Add(time.Hour)
+	if s.NaiveExpiry {
+		return t.UTC().Format("2006-01-02T15:04:05.999999")
+	}
+	return t
 }

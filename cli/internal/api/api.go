@@ -339,20 +339,20 @@ type Policy struct {
 // Session is the `POST /v1/local/sessions` answer. MinPluginVersion / MinCLIVersion (spec §13a) are read
 // when present: below them, ROS is off for the session and the banner says what to update.
 type Session struct {
-	RunID              string    `json:"run_id"`
-	ThreadID           string    `json:"thread_id"`
-	ProjectID          string    `json:"project_id"`
-	ProjectName        string    `json:"project_name"`
-	Reopened           bool      `json:"reopened"`
-	RunToken           string    `json:"run_token"`
-	ExpiresAt          time.Time `json:"expires_at"`
-	Context            string    `json:"context"`
-	Recall             *Recall   `json:"recall"`
-	SkillsManifestETag *string   `json:"skills_manifest_etag"`
-	Policy             *Policy   `json:"policy"`
-	TraceURL           string    `json:"trace_url"`
-	MinPluginVersion   string    `json:"min_plugin_version,omitempty"`
-	MinCLIVersion      string    `json:"min_cli_version,omitempty"`
+	RunID              string  `json:"run_id"`
+	ThreadID           string  `json:"thread_id"`
+	ProjectID          string  `json:"project_id"`
+	ProjectName        string  `json:"project_name"`
+	Reopened           bool    `json:"reopened"`
+	RunToken           string  `json:"run_token"`
+	ExpiresAt          Stamp   `json:"expires_at"`
+	Context            string  `json:"context"`
+	Recall             *Recall `json:"recall"`
+	SkillsManifestETag *string `json:"skills_manifest_etag"`
+	Policy             *Policy `json:"policy"`
+	TraceURL           string  `json:"trace_url"`
+	MinPluginVersion   string  `json:"min_plugin_version,omitempty"`
+	MinCLIVersion      string  `json:"min_cli_version,omitempty"`
 }
 
 func (c *Client) OpenSession(ctx context.Context, in *SessionRequest) (*Session, error) {
@@ -667,4 +667,26 @@ func (c *Client) PeersSummary(ctx context.Context, runID string) (*PeerSummary, 
 		return nil, err
 	}
 	return &out, nil
+}
+
+// Stamp is a time the backend sends as RFC 3339, or — from an older server — as a naive UTC datetime with no
+// offset ("2026-11-03T10:59:05.664194"). Either parses; the zero value is an empty string.
+type Stamp struct{ time.Time }
+
+func (s *Stamp) UnmarshalJSON(b []byte) error {
+	var raw string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if raw == "" {
+		s.Time = time.Time{}
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			s.Time = t.UTC()
+			return nil
+		}
+	}
+	return fmt.Errorf("unrecognised time %q", raw)
 }

@@ -149,6 +149,9 @@ type LoginOptions struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 }
 
+// maxTransientPolls is how many device-code polls in a row may fail on the network before login gives up.
+const maxTransientPolls = 5
+
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -190,6 +193,7 @@ func (s *Session) Login(ctx context.Context, o LoginOptions) (*api.Token, error)
 
 	interval := time.Duration(max(da.Interval, 1)) * time.Second
 	deadline := Now().Add(time.Duration(max(da.ExpiresIn, 60)) * time.Second)
+	transient := 0
 	for {
 		if err := o.Sleep(ctx, interval); err != nil {
 			return nil, err
@@ -208,6 +212,7 @@ func (s *Session) Login(ctx context.Context, o LoginOptions) (*api.Token, error)
 		}
 		switch api.OAuthCode(err) {
 		case "authorization_pending":
+			transient = 0
 		case "slow_down":
 			interval += 5 * time.Second // RFC 8628 §3.5
 		case "access_denied":
@@ -215,7 +220,13 @@ func (s *Session) Login(ctx context.Context, o LoginOptions) (*api.Token, error)
 		case "expired_token":
 			return nil, errors.New("the code expired before it was approved; run `ros-local login` again")
 		default:
-			return nil, fmt.Errorf("signing in: %w", err)
+			// A dropped connection — a keep-alive the server closed between two polls (Go never retries a POST on a
+			// stale one), a network blip — is not an answer: keep polling, a few times.
+			var apiErr *api.Error
+			transient++
+			if errors.As(err, &apiErr) || transient > maxTransientPolls {
+				return nil, fmt.Errorf("signing in: %w", err)
+			}
 		}
 		if Now().After(deadline) {
 			return nil, errors.New("the code expired before it was approved; run `ros-local login` again")

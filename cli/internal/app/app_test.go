@@ -500,3 +500,18 @@ func TestSessionStartRefreshRefusedDisabled(t *testing.T) {
 		t.Fatal("refresh token dropped")
 	}
 }
+
+func TestSessionStartAcceptsANaiveExpiry(t *testing.T) {
+	// Older backends answer expires_at without an offset; the hook must still open the session, not go "offline".
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	h.srv.NaiveExpiry = true
+	code, out, _ := h.run(`{"session_id":"sess-n","source":"startup","cwd":"`+h.repo+`"}`, "hook", "session-start")
+	o := decodeHook(t, out)
+	if code != 0 || !strings.HasPrefix(o.SystemMessage, `ROS · project "Payments"`) {
+		t.Fatalf("code %d banner %q", code, o.SystemMessage)
+	}
+	if len(h.srv.Sessions) != 1 {
+		t.Fatalf("sessions %d", len(h.srv.Sessions))
+	}
+}

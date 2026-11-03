@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -252,5 +253,36 @@ func TestRefresh401IsNotASignOut(t *testing.T) {
 	}
 	if saved, _ := s.Store.Get(s.Config.URL); saved == nil || saved.RefreshToken != "refresh-1" {
 		t.Fatal("credentials deleted on a 401")
+	}
+}
+
+func TestLoginRidesOutDroppedPolls(t *testing.T) {
+	// A keep-alive the server closes between two polls makes Go report EOF on the POST (it never retries a
+	// POST on a stale connection): the poll must carry on, as it does for authorization_pending.
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.DropPolls, srv.PendingPolls = 2, 1
+	s := newSession(t, srv)
+	polls := 0
+	tok, err := s.Login(context.Background(), LoginOptions{Out: io.Discard,
+		Sleep: func(context.Context, time.Duration) error { polls++; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.DeviceID != "dev1" || polls != 4 {
+		t.Fatalf("tok %+v polls %d", tok, polls)
+	}
+}
+
+func TestLoginGivesUpAfterRepeatedDrops(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	srv.DropPolls = 50
+	s := newSession(t, srv)
+	polls := 0
+	_, err := s.Login(context.Background(), LoginOptions{Out: io.Discard,
+		Sleep: func(context.Context, time.Duration) error { polls++; return nil }})
+	if err == nil || !strings.Contains(err.Error(), "signing in:") || polls != maxTransientPolls+1 {
+		t.Fatalf("err %v polls %d", err, polls)
 	}
 }
