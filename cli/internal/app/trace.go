@@ -41,7 +41,8 @@ type spoolEvent struct {
 	Agent      string   `json:"agent,omitempty"`
 	Trigger    string   `json:"trigger,omitempty"`
 	Transcript string   `json:"transcript,omitempty"`
-	Text       string   `json:"text,omitempty"` // the prompt (prompt), the tool input (tool_start)
+	Retain     string   `json:"retain,omitempty"` // stop: the session's §8.3 mode (auto = send new turns)
+	Text       string   `json:"text,omitempty"`   // the prompt (prompt), the tool input (tool_start)
 	Output     string   `json:"output,omitempty"`
 }
 
@@ -136,7 +137,7 @@ func (a *App) traceHook(event string) int {
 	case "compact":
 		ev.Trigger = in.Trigger
 	case "stop":
-		ev.Transcript = in.TranscriptPath
+		ev.Transcript, ev.Retain = in.TranscriptPath, st.Retain
 	}
 	_ = appendEvent(st.RunID, ev)
 	if event == "stop" || event == "compact" {
@@ -403,6 +404,7 @@ func markSent(runID string, spans []api.Span) error {
 func dropSpool(runID string) {
 	_ = os.Remove(spoolPath(runID))
 	_ = os.Remove(sentPath(runID))
+	_ = os.Remove(retainedPath(runID))
 }
 
 // flush ships every spool (or one run's): the spans not sent yet, in batches. A spool the server won't
@@ -441,6 +443,19 @@ func (a *App) flush(args []string) int {
 }
 
 func (a *App) flushRun(ctx context.Context, c *api.Client, runID, level string) {
+	// retain: auto — the turns finished so far go to the person's memory (ROS checks the project's setting).
+	if events := readEvents(runID); len(events) > 0 {
+		last := events[len(events)-1]
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Event == "stop" && events[i].Transcript != "" {
+				last = events[i]
+				break
+			}
+		}
+		if last.Retain == "auto" && last.Transcript != "" {
+			_, _ = retainTurns(ctx, c, runID, last.Transcript, false)
+		}
+	}
 	sent := readSent(runID)
 	var todo []api.Span
 	for _, s := range buildSpans(readEvents(runID), levelAbove(level)) {

@@ -123,7 +123,8 @@ type sessionState struct {
 	ProjectID string    `json:"project_id"`
 	URL       string    `json:"url"`
 	OpenedAt  time.Time `json:"opened_at"`
-	Dir       string    `json:"dir,omitempty"` // the project dir, so /ros:share and /ros:private find this session
+	Dir       string    `json:"dir,omitempty"`    // the project dir, so /ros:share and /ros:private find this session
+	Retain    string    `json:"retain,omitempty"` // off | ask | auto (the project's §8.3 setting at session start)
 }
 
 var unsafeID = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -281,7 +282,7 @@ func (a *App) sessionStart() int {
 	}
 	if in.SessionID != "" {
 		_ = saveState(in.SessionID, &sessionState{RunID: s.RunID, ProjectID: s.ProjectID, URL: cfg.URL, OpenedAt: now.UTC(),
-			Dir: dir})
+			Dir: dir, Retain: s.Retain})
 	}
 
 	if v := a.pluginVersion(); s.MinPluginVersion != "" && versionLess(v, s.MinPluginVersion) {
@@ -321,6 +322,12 @@ func (a *App) sessionStart() int {
 	notes = append(notes, captureNotes(captureLevel(cfg), s.CaptureLevel)...)
 	if s.CapNotice != "" {
 		notes = append(notes, "ROS: "+s.CapNotice)
+	}
+	switch s.Retain {
+	case "ask":
+		notes = append(notes, "ROS: `/ros:remember-session` saves this session to your own memory")
+	case "auto":
+		notes = append(notes, "ROS: this session's turns are saved to your own memory as you work (secrets removed)")
 	}
 	privPart := ""
 	if s.Visibility == "private" {

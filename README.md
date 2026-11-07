@@ -75,6 +75,10 @@ did: turns, tool calls, files touched, model calls and token use (API-equivalent
   replies; `full` adds tool input/output. `ros-local capture <level>` shows what a level records and asks
   before raising it. Text is only written to the spool above `metadata`, and ROS scrubs secrets and enforces
   the project's ceiling. The session banner says when the project allows more than you share.
+- **Session memory (if the project turns it on).** With *Retain from sessions* = ask, `/ros:remember-session`
+  saves this session's turns (what you asked, what Claude answered) to your own ROS memory; with auto, new
+  turns are saved after each one. Secrets are removed on your machine and again by ROS. It only ever writes
+  to your memory, never the project's — ask ROS later "what did I do in payments-api last week?".
 - **Sessions are shared with the project by default.** `/ros:private` makes the current session's trace
   visible to you only; `/ros:share` shares it again (also on the trace page). Admins can't override it.
 

@@ -70,7 +70,10 @@ type Server struct {
 	SpansTooLate   bool                        // answer spans batches with skipped=too_late
 	CaptureCeiling string                      // the project's capture_level on POST /sessions ("" = metadata)
 	CapNotice      string                      // cap_notice on POST /sessions
-	Visibility     map[string]string           // run id -> project | private (POST .../visibility)
+	RetainMode     string                      // retain on POST /sessions and the answer to .../retain ("" = off)
+	Retained       []map[string]any            // turns received on .../retain
+	RetainExplicit []bool
+	Visibility     map[string]string // run id -> project | private (POST .../visibility)
 	ManifestCalls  int
 	BundleCalls    [][]string
 	LastAuth       string // Authorization header of the last /v1/local request
@@ -97,6 +100,7 @@ func New() *Server {
 	mux.HandleFunc("POST /v1/local/sessions/{id}/end", s.auth(s.endSession))
 	mux.HandleFunc("POST /v1/local/sessions/{id}/spans", s.auth(s.spans))
 	mux.HandleFunc("POST /v1/local/sessions/{id}/visibility", s.auth(s.setVisibility))
+	mux.HandleFunc("POST /v1/local/sessions/{id}/retain", s.auth(s.retain))
 	mux.HandleFunc("GET /v1/local/skills/manifest", s.auth(s.manifest))
 	mux.HandleFunc("GET /v1/local/skills/bundle", s.auth(s.bundle))
 	s.Server = httptest.NewServer(mux)
@@ -327,7 +331,8 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 			"egress_allowlist": []string{}, "enforcement": "audit", "etag": `"p"`},
 		"trace_url":          s.URL + "/traces/t1",
 		"min_plugin_version": nullable(s.MinPluginVersion), "min_cli_version": nullable(s.MinCLIVersion),
-		"capture_level": firstOr(s.CaptureCeiling, "metadata"), "cap_notice": nullable(s.CapNotice), "visibility": firstOr(s.Visibility["run-"+fmt.Sprint(len(s.Sessions))], "project"),
+		"capture_level": firstOr(s.CaptureCeiling, "metadata"), "cap_notice": nullable(s.CapNotice),
+		"retain": firstOr(s.RetainMode, "off"), "visibility": firstOr(s.Visibility["run-"+fmt.Sprint(len(s.Sessions))], "project"),
 	})
 }
 
@@ -336,6 +341,28 @@ func firstOr(v, def string) string {
 		return def
 	}
 	return v
+}
+
+func (s *Server) retain(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Turns    []map[string]any `json:"turns"`
+		Explicit bool             `json:"explicit"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	mode := firstOr(s.RetainMode, "off")
+	if mode == "off" || (mode == "ask" && !body.Explicit) {
+		skipped := "retain_off"
+		if mode == "ask" {
+			skipped = "ask_first"
+		}
+		writeJSON(w, 200, map[string]any{"saved": 0, "mode": mode, "skipped": skipped})
+		return
+	}
+	s.Retained = append(s.Retained, body.Turns...)
+	s.RetainExplicit = append(s.RetainExplicit, body.Explicit)
+	writeJSON(w, 200, map[string]any{"saved": len(body.Turns), "mode": mode})
 }
 
 func (s *Server) setVisibility(w http.ResponseWriter, r *http.Request) {

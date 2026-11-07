@@ -56,6 +56,7 @@ Usage:
   ros-local logout                                            forget this device's tokens
   ros-local capture [metadata|prompts|full]                   what your local traces carry (asks before raising)
   ros-local share | private                                   this repo's current session: shared or private
+  ros-local remember-session                                  save this repo's current session to your memory
   ros-local version
 
 Called by the plugin (not by hand):
@@ -94,6 +95,8 @@ func (a *App) Run(args []string) int {
 		return a.share("project")
 	case "private":
 		return a.share("private")
+	case "remember-session":
+		return a.rememberSession()
 	case "hook":
 		return a.hook(rest)
 	case "version", "--version", "-v":

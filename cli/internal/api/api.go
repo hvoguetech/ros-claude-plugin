@@ -356,6 +356,30 @@ type Session struct {
 	CaptureLevel string `json:"capture_level,omitempty"`
 	Visibility   string `json:"visibility,omitempty"`
 	CapNotice    string `json:"cap_notice,omitempty"` // the team's monthly cap is reached (spec §11a, on_cap=warn)
+	Retain       string `json:"retain,omitempty"`     // off | ask | auto: the session's turns into your memory (§8.3)
+}
+
+// Turn is one exchange from the transcript: what the person asked and what Claude answered.
+type Turn struct {
+	ID     string `json:"id"`
+	Prompt string `json:"prompt"`
+	Reply  string `json:"reply"`
+	At     string `json:"at,omitempty"`
+}
+
+type RetainResult struct {
+	Saved   int    `json:"saved"`
+	Mode    string `json:"mode"`
+	Skipped string `json:"skipped"`
+}
+
+func (c *Client) Retain(ctx context.Context, runID string, turns []Turn, explicit bool) (*RetainResult, error) {
+	var out RetainResult
+	body := map[string]any{"turns": turns, "explicit": explicit}
+	if err := c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/retain", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // SetVisibility is /ros:share (project) or /ros:private (private) for one session.
