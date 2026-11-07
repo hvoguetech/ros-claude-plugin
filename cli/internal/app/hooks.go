@@ -38,6 +38,15 @@ type hookInput struct {
 	HookEventName  string `json:"hook_event_name"`
 	Source         string `json:"source"` // SessionStart: startup | resume | clear | compact | fork
 	Reason         string `json:"reason"` // SessionEnd
+
+	// The trace hooks (trace.go).
+	Prompt       string          `json:"prompt"`        // UserPromptSubmit
+	ToolName     string          `json:"tool_name"`     // Pre/PostToolUse
+	ToolUseID    string          `json:"tool_use_id"`   // Pre/PostToolUse
+	ToolInput    json.RawMessage `json:"tool_input"`    // Pre/PostToolUse
+	ToolResponse json.RawMessage `json:"tool_response"` // PostToolUse
+	AgentType    string          `json:"agent_type"`    // SubagentStop
+	Trigger      string          `json:"trigger"`       // PreCompact: manual | auto
 }
 
 type hookSpecific struct {
@@ -62,6 +71,9 @@ func (a *App) hook(args []string) int {
 	case "session-end", "SessionEnd":
 		return a.sessionEnd(args[1:])
 	default:
+		if ev, ok := traceEvents[args[0]]; ok {
+			return a.traceHook(ev)
+		}
 		// Unknown events are a no-op so a newer plugin never breaks an older binary.
 		return 0
 	}
@@ -389,6 +401,10 @@ func (a *App) sessionEnd(args []string) int {
 	if in.SessionID == "" || loadState(in.SessionID) == nil {
 		return 0
 	}
+	if st := loadState(in.SessionID); st != nil {
+		_ = appendEvent(st.RunID, spoolEvent{Event: "stop", At: float64(time.Now().UnixNano()) / 1e9,
+			Transcript: in.TranscriptPath}) // closes an open turn; the detached end flushes
+	}
 	if a.Spawn != nil {
 		if err := a.Spawn("hook", "session-end", "--detached", "--session-id", in.SessionID, "--reason", in.Reason); err == nil {
 			return 0
@@ -413,7 +429,9 @@ func (a *App) endSession(sessionID, reason string, budget time.Duration) int {
 	if err != nil {
 		return 0
 	}
-	err = a.client(cfg.URL, token).EndSession(ctx, st.RunID, reason)
+	c := a.client(cfg.URL, token)
+	a.flushRun(ctx, c, st.RunID, captureLevel(cfg)) // late spans are still taken after the end
+	err = c.EndSession(ctx, st.RunID, reason)
 	if err == nil || api.IsStatus(err, 404) || api.IsStatus(err, 409) {
 		_ = os.Remove(statePath(sessionID))
 	}

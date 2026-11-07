@@ -63,6 +63,18 @@ Enforced guarantees stay on the ROS devbox.
    Linking writes `.git/ros.json`, creates `.claude/skills/`, and adds the ROS skill paths to
    `.git/info/exclude`.
 
+## Local traces
+
+Every session is traced into ROS (Traces → Local) so you and your team can see what local Claude Code work
+did: turns, tool calls, files touched, model calls and token use (API-equivalent cost).
+
+- The hooks only append to `~/.ros/spool/<run>.jsonl` (no network, a few ms each). `ros-local flush` ships
+  the spool in the background after each turn and at the end of the session; offline spans ship next time.
+- **What is captured is your choice, capped by the project:** `metadata` (default) is names, durations,
+  file paths and token counts only — no prompts, no code. `prompts` adds your prompts and the model's
+  replies; `full` adds tool input/output. Set it in `~/.ros/config.json` (`"capture_level"`). Text is only
+  written to the spool above `metadata`, and ROS scrubs secrets and enforces the project's ceiling.
+
 ## Every session
 
 ```text

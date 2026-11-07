@@ -58,7 +58,10 @@ Usage:
 
 Called by the plugin (not by hand):
   ros-local mcp-headers --project-dir DIR                     MCP headersHelper
-  ros-local hook session-start | session-end                  Claude Code hooks
+  ros-local hook <event>                                      Claude Code hooks (session-start, session-end,
+                                                              user-prompt-submit, pre-tool-use, post-tool-use,
+                                                              subagent-stop, pre-compact, stop)
+  ros-local flush [--run ID]                                  ship the local trace spool
 `
 
 // Run executes one command and returns the exit code.
@@ -81,6 +84,8 @@ func (a *App) Run(args []string) int {
 		return a.status(rest)
 	case "mcp-headers":
 		return a.mcpHeaders(rest)
+	case "flush":
+		return a.flush(rest)
 	case "hook":
 		return a.hook(rest)
 	case "version", "--version", "-v":

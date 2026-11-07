@@ -63,8 +63,11 @@ type Server struct {
 	Context        string
 	SessionStatus  int // non-zero: answer POST /sessions with this status
 	SessionDetail  string
-	Sessions       []map[string]any // bodies received
-	Ended          []string         // run ids ended
+	Sessions       []map[string]any            // bodies received
+	Ended          []string                    // run ids ended
+	Spans          map[string][]map[string]any // run id -> spans received (POST .../spans)
+	SpanLevels     []string                    // capture_level of each spans batch
+	SpansTooLate   bool                        // answer spans batches with skipped=too_late
 	ManifestCalls  int
 	BundleCalls    [][]string
 	LastAuth       string // Authorization header of the last /v1/local request
@@ -89,6 +92,7 @@ func New() *Server {
 	mux.HandleFunc("GET /v1/local/me", s.auth(s.me))
 	mux.HandleFunc("POST /v1/local/sessions", s.auth(s.openSession))
 	mux.HandleFunc("POST /v1/local/sessions/{id}/end", s.auth(s.endSession))
+	mux.HandleFunc("POST /v1/local/sessions/{id}/spans", s.auth(s.spans))
 	mux.HandleFunc("GET /v1/local/skills/manifest", s.auth(s.manifest))
 	mux.HandleFunc("GET /v1/local/skills/bundle", s.auth(s.bundle))
 	s.Server = httptest.NewServer(mux)
@@ -327,6 +331,27 @@ func (s *Server) endSession(w http.ResponseWriter, r *http.Request) {
 	defer s.Mu.Unlock()
 	s.Ended = append(s.Ended, r.PathValue("id"))
 	writeJSON(w, 200, map[string]any{"run_id": r.PathValue("id"), "status": "ended", "ended_at": time.Now()})
+}
+
+func (s *Server) spans(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Spans        []map[string]any `json:"spans"`
+		CaptureLevel string           `json:"capture_level"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if s.SpansTooLate {
+		writeJSON(w, 200, map[string]any{"accepted": 0, "skipped": "too_late"})
+		return
+	}
+	if s.Spans == nil {
+		s.Spans = map[string][]map[string]any{}
+	}
+	id := r.PathValue("id")
+	s.Spans[id] = append(s.Spans[id], body.Spans...)
+	s.SpanLevels = append(s.SpanLevels, body.CaptureLevel)
+	writeJSON(w, 200, map[string]any{"accepted": len(body.Spans), "capture_level": body.CaptureLevel})
 }
 
 // SkillSHA is the backend's files_sha256 for one skill.

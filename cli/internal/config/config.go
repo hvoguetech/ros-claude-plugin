@@ -29,6 +29,9 @@ type Config struct {
 	UserEmail        string    `json:"user_email,omitempty"`
 	Scopes           []string  `json:"scopes,omitempty"`
 	SignedInAt       time.Time `json:"signed_in_at,omitzero"`
+	// CaptureLevel is what this developer lets local traces carry: metadata (default) | prompts | full. The
+	// project's ceiling still applies (the server enforces it); text is only spooled at all above metadata.
+	CaptureLevel string `json:"capture_level,omitempty"`
 }
 
 // Home is ros-local's state directory: $ROS_HOME, else ~/.ros.

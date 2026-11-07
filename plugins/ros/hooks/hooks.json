@@ -1,5 +1,5 @@
 {
-  "description": "ROS: open the local session, sync skills and recall memory at start; end the session at exit.",
+  "description": "ROS: open the local session, sync skills and recall memory at start; trace the session locally (spooled, shipped in the background); end the session at exit.",
   "hooks": {
     "SessionStart": [
       {
@@ -18,6 +18,72 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook session-end"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook user-prompt-submit",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook pre-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook post-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook subagent-stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook pre-compact",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ros-local\" hook stop",
+            "timeout": 5
           }
         ]
       }

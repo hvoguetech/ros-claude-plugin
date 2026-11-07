@@ -374,6 +374,40 @@ func (c *Client) EndSession(ctx context.Context, runID, reason string) error {
 	return c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/end", body, nil)
 }
 
+// Span is one finished span of a local session (spec §11): the server shapes it to the capture level.
+type Span struct {
+	ID           string         `json:"id"`
+	ParentID     string         `json:"parent_id,omitempty"`
+	Name         string         `json:"name"`
+	Kind         string         `json:"kind"` // chain | tool | llm | subagent
+	StartWall    float64        `json:"start_wall"`
+	EndWall      float64        `json:"end_wall"`
+	LatencyMS    float64        `json:"latency_ms"`
+	Model        string         `json:"model,omitempty"`
+	InputTokens  int            `json:"input_tokens,omitempty"`
+	OutputTokens int            `json:"output_tokens,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Attributes   map[string]any `json:"attributes,omitempty"`
+	Input        string         `json:"input,omitempty"`
+	Output       string         `json:"output,omitempty"`
+}
+
+// SpansResult is `POST /v1/local/sessions/{id}/spans`.
+type SpansResult struct {
+	Accepted     int    `json:"accepted"`
+	Skipped      string `json:"skipped"` // too_late | duplicate
+	CaptureLevel string `json:"capture_level"`
+}
+
+func (c *Client) PostSpans(ctx context.Context, runID, captureLevel string, spans []Span) (*SpansResult, error) {
+	var out SpansResult
+	body := map[string]any{"spans": spans, "capture_level": captureLevel}
+	if err := c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/spans", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // SkillEntry is one manifest row (spec §7).
 type SkillEntry struct {
 	Name    string  `json:"name"`
