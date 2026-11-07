@@ -178,3 +178,46 @@ func TestUnknownSessionAndUnknownEventsAreNoOps(t *testing.T) {
 		t.Fatalf("spooled for no session: %v", entries)
 	}
 }
+
+func TestCaptureAsksBeforeRaisingAndTheBannerSaysWhatTheProjectAllows(t *testing.T) {
+	h := newHarness(t)
+	h.srv.CaptureCeiling = "prompts"
+	h.signIn(time.Hour)
+	_, out, _ := h.run(`{"session_id":"c1"}`, "hook", "session-start")
+	if banner := decodeHook(t, out).SystemMessage; !strings.Contains(banner, "this project allows prompts — `ros-local capture prompts`") {
+		t.Fatalf("banner: %s", banner)
+	}
+	if code, out, _ := h.run("no\n", "capture", "full"); code != 1 || !strings.Contains(out, "tool inputs and outputs") {
+		t.Fatalf("raising must show what it captures and ask (code %d): %s", code, out)
+	}
+	if cfg, _ := config.Load(); captureLevel(cfg) != "metadata" {
+		t.Fatal("declined, yet changed")
+	}
+	if code, _, _ := h.run("yes\n", "capture", "full"); code != 0 {
+		t.Fatal("confirmed raise failed")
+	}
+	_, out, _ = h.run(`{"session_id":"c2"}`, "hook", "session-start")
+	if banner := decodeHook(t, out).SystemMessage; !strings.Contains(banner, "you chose full traces; this project caps them at prompts") {
+		t.Fatalf("banner: %s", banner)
+	}
+	if code, _, _ := h.run("", "capture", "metadata"); code != 0 { // lowering never asks
+		t.Fatal("lowering failed")
+	}
+}
+
+func TestPrivateAndShareActOnThisRepoSession(t *testing.T) {
+	h := newHarness(t)
+	h.env["CLAUDE_PROJECT_DIR"] = h.repo
+	h.session(t, "p1")
+	code, out, _ := h.run("", "private")
+	if code != 0 || h.srv.Visibility["run-1"] != "private" || !strings.Contains(out, "only you see") {
+		t.Fatalf("private: code %d out %q vis %v", code, out, h.srv.Visibility)
+	}
+	if code, _, _ := h.run("", "share"); code != 0 || h.srv.Visibility["run-1"] != "project" {
+		t.Fatalf("share: %v", h.srv.Visibility)
+	}
+	h.env["CLAUDE_PROJECT_DIR"] = t.TempDir()
+	if code, _, _ := h.run("", "private"); code == 0 {
+		t.Fatal("another repo has no session here")
+	}
+}

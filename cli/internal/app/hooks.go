@@ -123,6 +123,7 @@ type sessionState struct {
 	ProjectID string    `json:"project_id"`
 	URL       string    `json:"url"`
 	OpenedAt  time.Time `json:"opened_at"`
+	Dir       string    `json:"dir,omitempty"` // the project dir, so /ros:share and /ros:private find this session
 }
 
 var unsafeID = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -279,7 +280,8 @@ func (a *App) sessionStart() int {
 		}
 	}
 	if in.SessionID != "" {
-		_ = saveState(in.SessionID, &sessionState{RunID: s.RunID, ProjectID: s.ProjectID, URL: cfg.URL, OpenedAt: now.UTC()})
+		_ = saveState(in.SessionID, &sessionState{RunID: s.RunID, ProjectID: s.ProjectID, URL: cfg.URL, OpenedAt: now.UTC(),
+			Dir: dir})
 	}
 
 	if v := a.pluginVersion(); s.MinPluginVersion != "" && versionLess(v, s.MinPluginVersion) {
@@ -316,12 +318,18 @@ func (a *App) sessionStart() int {
 		}
 	}
 
+	notes = append(notes, captureNotes(captureLevel(cfg), s.CaptureLevel)...)
+	privPart := ""
+	if s.Visibility == "private" {
+		privPart = " · private session"
+	}
+
 	memPart, recalled := "", 0
 	if s.Recall != nil {
 		recalled = len(s.Recall.ItemIDs)
 		memPart = fmt.Sprintf(" · memory: %s · recalled %d", s.Recall.Profile, recalled)
 	}
-	status := fmt.Sprintf("ROS · project %q%s%s", s.ProjectName, skillsPart, memPart)
+	status := fmt.Sprintf("ROS · project %q%s%s%s", s.ProjectName, skillsPart, memPart, privPart)
 	banner := strings.Join(append([]string{status}, notes...), "\n")
 
 	model := status + "\n" +

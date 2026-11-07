@@ -54,6 +54,8 @@ Usage:
   ros-local sync                                              sync the project's skills now
   ros-local status                                            show sign-in, link and sync state
   ros-local logout                                            forget this device's tokens
+  ros-local capture [metadata|prompts|full]                   what your local traces carry (asks before raising)
+  ros-local share | private                                   this repo's current session: shared or private
   ros-local version
 
 Called by the plugin (not by hand):
@@ -86,6 +88,12 @@ func (a *App) Run(args []string) int {
 		return a.mcpHeaders(rest)
 	case "flush":
 		return a.flush(rest)
+	case "capture":
+		return a.capture(rest)
+	case "share":
+		return a.share("project")
+	case "private":
+		return a.share("private")
 	case "hook":
 		return a.hook(rest)
 	case "version", "--version", "-v":

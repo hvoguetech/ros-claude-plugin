@@ -72,8 +72,11 @@ did: turns, tool calls, files touched, model calls and token use (API-equivalent
   the spool in the background after each turn and at the end of the session; offline spans ship next time.
 - **What is captured is your choice, capped by the project:** `metadata` (default) is names, durations,
   file paths and token counts only — no prompts, no code. `prompts` adds your prompts and the model's
-  replies; `full` adds tool input/output. Set it in `~/.ros/config.json` (`"capture_level"`). Text is only
-  written to the spool above `metadata`, and ROS scrubs secrets and enforces the project's ceiling.
+  replies; `full` adds tool input/output. `ros-local capture <level>` shows what a level records and asks
+  before raising it. Text is only written to the spool above `metadata`, and ROS scrubs secrets and enforces
+  the project's ceiling. The session banner says when the project allows more than you share.
+- **Sessions are shared with the project by default.** `/ros:private` makes the current session's trace
+  visible to you only; `/ros:share` shares it again (also on the trace page). Admins can't override it.
 
 ## Every session
 

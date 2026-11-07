@@ -68,6 +68,8 @@ type Server struct {
 	Spans          map[string][]map[string]any // run id -> spans received (POST .../spans)
 	SpanLevels     []string                    // capture_level of each spans batch
 	SpansTooLate   bool                        // answer spans batches with skipped=too_late
+	CaptureCeiling string                      // the project's capture_level on POST /sessions ("" = metadata)
+	Visibility     map[string]string           // run id -> project | private (POST .../visibility)
 	ManifestCalls  int
 	BundleCalls    [][]string
 	LastAuth       string // Authorization header of the last /v1/local request
@@ -93,6 +95,7 @@ func New() *Server {
 	mux.HandleFunc("POST /v1/local/sessions", s.auth(s.openSession))
 	mux.HandleFunc("POST /v1/local/sessions/{id}/end", s.auth(s.endSession))
 	mux.HandleFunc("POST /v1/local/sessions/{id}/spans", s.auth(s.spans))
+	mux.HandleFunc("POST /v1/local/sessions/{id}/visibility", s.auth(s.setVisibility))
 	mux.HandleFunc("GET /v1/local/skills/manifest", s.auth(s.manifest))
 	mux.HandleFunc("GET /v1/local/skills/bundle", s.auth(s.bundle))
 	s.Server = httptest.NewServer(mux)
@@ -323,7 +326,29 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 			"egress_allowlist": []string{}, "enforcement": "audit", "etag": `"p"`},
 		"trace_url":          s.URL + "/traces/t1",
 		"min_plugin_version": nullable(s.MinPluginVersion), "min_cli_version": nullable(s.MinCLIVersion),
+		"capture_level": firstOr(s.CaptureCeiling, "metadata"), "visibility": firstOr(s.Visibility["run-"+fmt.Sprint(len(s.Sessions))], "project"),
 	})
+}
+
+func firstOr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func (s *Server) setVisibility(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Visibility string `json:"visibility"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if s.Visibility == nil {
+		s.Visibility = map[string]string{}
+	}
+	s.Visibility[r.PathValue("id")] = body.Visibility
+	writeJSON(w, 200, map[string]any{"run_id": r.PathValue("id"), "visibility": body.Visibility})
 }
 
 func (s *Server) endSession(w http.ResponseWriter, r *http.Request) {

@@ -352,6 +352,19 @@ type Session struct {
 	TraceURL           string    `json:"trace_url"`
 	MinPluginVersion   string    `json:"min_plugin_version,omitempty"`
 	MinCLIVersion      string    `json:"min_cli_version,omitempty"`
+	// The most the project lets a local trace carry, and who sees this session (spec §11).
+	CaptureLevel string `json:"capture_level,omitempty"`
+	Visibility   string `json:"visibility,omitempty"`
+}
+
+// SetVisibility is /ros:share (project) or /ros:private (private) for one session.
+func (c *Client) SetVisibility(ctx context.Context, runID, visibility string) (string, error) {
+	var out struct {
+		Visibility string `json:"visibility"`
+	}
+	err := c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/visibility",
+		map[string]string{"visibility": visibility}, &out)
+	return out.Visibility, err
 }
 
 func (c *Client) OpenSession(ctx context.Context, in *SessionRequest) (*Session, error) {
