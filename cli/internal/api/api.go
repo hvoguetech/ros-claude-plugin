@@ -355,6 +355,7 @@ type Session struct {
 	// The most the project lets a local trace carry, and who sees this session (spec §11).
 	CaptureLevel string `json:"capture_level,omitempty"`
 	Visibility   string `json:"visibility,omitempty"`
+	CapNotice    string `json:"cap_notice,omitempty"` // the team's monthly cap is reached (spec §11a, on_cap=warn)
 }
 
 // SetVisibility is /ros:share (project) or /ros:private (private) for one session.

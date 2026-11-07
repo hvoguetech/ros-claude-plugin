@@ -69,6 +69,7 @@ type Server struct {
 	SpanLevels     []string                    // capture_level of each spans batch
 	SpansTooLate   bool                        // answer spans batches with skipped=too_late
 	CaptureCeiling string                      // the project's capture_level on POST /sessions ("" = metadata)
+	CapNotice      string                      // cap_notice on POST /sessions
 	Visibility     map[string]string           // run id -> project | private (POST .../visibility)
 	ManifestCalls  int
 	BundleCalls    [][]string
@@ -326,7 +327,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 			"egress_allowlist": []string{}, "enforcement": "audit", "etag": `"p"`},
 		"trace_url":          s.URL + "/traces/t1",
 		"min_plugin_version": nullable(s.MinPluginVersion), "min_cli_version": nullable(s.MinCLIVersion),
-		"capture_level": firstOr(s.CaptureCeiling, "metadata"), "visibility": firstOr(s.Visibility["run-"+fmt.Sprint(len(s.Sessions))], "project"),
+		"capture_level": firstOr(s.CaptureCeiling, "metadata"), "cap_notice": nullable(s.CapNotice), "visibility": firstOr(s.Visibility["run-"+fmt.Sprint(len(s.Sessions))], "project"),
 	})
 }
 

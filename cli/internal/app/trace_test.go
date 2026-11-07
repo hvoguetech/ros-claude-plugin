@@ -221,3 +221,13 @@ func TestPrivateAndShareActOnThisRepoSession(t *testing.T) {
 		t.Fatal("another repo has no session here")
 	}
 }
+
+func TestTheBannerSaysWhenTheTeamCapIsReached(t *testing.T) {
+	h := newHarness(t)
+	h.srv.CapNotice = "the team's monthly cap ($500) is reached"
+	h.signIn(time.Hour)
+	_, out, _ := h.run(`{"session_id":"cap"}`, "hook", "session-start")
+	if banner := decodeHook(t, out).SystemMessage; !strings.Contains(banner, "ROS: the team's monthly cap ($500) is reached") {
+		t.Fatalf("banner: %s", banner)
+	}
+}

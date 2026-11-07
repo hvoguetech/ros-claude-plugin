@@ -319,6 +319,9 @@ func (a *App) sessionStart() int {
 	}
 
 	notes = append(notes, captureNotes(captureLevel(cfg), s.CaptureLevel)...)
+	if s.CapNotice != "" {
+		notes = append(notes, "ROS: "+s.CapNotice)
+	}
 	privPart := ""
 	if s.Visibility == "private" {
 		privPart = " · private session"
