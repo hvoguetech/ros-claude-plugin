@@ -352,6 +352,44 @@ type Session struct {
 	TraceURL           string    `json:"trace_url"`
 	MinPluginVersion   string    `json:"min_plugin_version,omitempty"`
 	MinCLIVersion      string    `json:"min_cli_version,omitempty"`
+	// The most the project lets a local trace carry, and who sees this session (spec §11).
+	CaptureLevel string `json:"capture_level,omitempty"`
+	Visibility   string `json:"visibility,omitempty"`
+	CapNotice    string `json:"cap_notice,omitempty"` // the team's monthly cap is reached (spec §11a, on_cap=warn)
+	Retain       string `json:"retain,omitempty"`     // off | ask | auto: the session's turns into your memory (§8.3)
+}
+
+// Turn is one exchange from the transcript: what the person asked and what Claude answered.
+type Turn struct {
+	ID     string `json:"id"`
+	Prompt string `json:"prompt"`
+	Reply  string `json:"reply"`
+	At     string `json:"at,omitempty"`
+}
+
+type RetainResult struct {
+	Saved   int    `json:"saved"`
+	Mode    string `json:"mode"`
+	Skipped string `json:"skipped"`
+}
+
+func (c *Client) Retain(ctx context.Context, runID string, turns []Turn, explicit bool) (*RetainResult, error) {
+	var out RetainResult
+	body := map[string]any{"turns": turns, "explicit": explicit}
+	if err := c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/retain", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetVisibility is /ros:share (project) or /ros:private (private) for one session.
+func (c *Client) SetVisibility(ctx context.Context, runID, visibility string) (string, error) {
+	var out struct {
+		Visibility string `json:"visibility"`
+	}
+	err := c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/visibility",
+		map[string]string{"visibility": visibility}, &out)
+	return out.Visibility, err
 }
 
 func (c *Client) OpenSession(ctx context.Context, in *SessionRequest) (*Session, error) {
@@ -372,6 +410,40 @@ func (c *Client) EndSession(ctx context.Context, runID, reason string) error {
 		body["reason"] = reason
 	}
 	return c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/end", body, nil)
+}
+
+// Span is one finished span of a local session (spec §11): the server shapes it to the capture level.
+type Span struct {
+	ID           string         `json:"id"`
+	ParentID     string         `json:"parent_id,omitempty"`
+	Name         string         `json:"name"`
+	Kind         string         `json:"kind"` // chain | tool | llm | subagent
+	StartWall    float64        `json:"start_wall"`
+	EndWall      float64        `json:"end_wall"`
+	LatencyMS    float64        `json:"latency_ms"`
+	Model        string         `json:"model,omitempty"`
+	InputTokens  int            `json:"input_tokens,omitempty"`
+	OutputTokens int            `json:"output_tokens,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Attributes   map[string]any `json:"attributes,omitempty"`
+	Input        string         `json:"input,omitempty"`
+	Output       string         `json:"output,omitempty"`
+}
+
+// SpansResult is `POST /v1/local/sessions/{id}/spans`.
+type SpansResult struct {
+	Accepted     int    `json:"accepted"`
+	Skipped      string `json:"skipped"` // too_late | duplicate
+	CaptureLevel string `json:"capture_level"`
+}
+
+func (c *Client) PostSpans(ctx context.Context, runID, captureLevel string, spans []Span) (*SpansResult, error) {
+	var out SpansResult
+	body := map[string]any{"spans": spans, "capture_level": captureLevel}
+	if err := c.postJSON(ctx, "/v1/local/sessions/"+url.PathEscape(runID)+"/spans", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // SkillEntry is one manifest row (spec §7).

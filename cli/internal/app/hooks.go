@@ -38,6 +38,15 @@ type hookInput struct {
 	HookEventName  string `json:"hook_event_name"`
 	Source         string `json:"source"` // SessionStart: startup | resume | clear | compact | fork
 	Reason         string `json:"reason"` // SessionEnd
+
+	// The trace hooks (trace.go).
+	Prompt       string          `json:"prompt"`        // UserPromptSubmit
+	ToolName     string          `json:"tool_name"`     // Pre/PostToolUse
+	ToolUseID    string          `json:"tool_use_id"`   // Pre/PostToolUse
+	ToolInput    json.RawMessage `json:"tool_input"`    // Pre/PostToolUse
+	ToolResponse json.RawMessage `json:"tool_response"` // PostToolUse
+	AgentType    string          `json:"agent_type"`    // SubagentStop
+	Trigger      string          `json:"trigger"`       // PreCompact: manual | auto
 }
 
 type hookSpecific struct {
@@ -62,6 +71,9 @@ func (a *App) hook(args []string) int {
 	case "session-end", "SessionEnd":
 		return a.sessionEnd(args[1:])
 	default:
+		if ev, ok := traceEvents[args[0]]; ok {
+			return a.traceHook(ev)
+		}
 		// Unknown events are a no-op so a newer plugin never breaks an older binary.
 		return 0
 	}
@@ -111,6 +123,8 @@ type sessionState struct {
 	ProjectID string    `json:"project_id"`
 	URL       string    `json:"url"`
 	OpenedAt  time.Time `json:"opened_at"`
+	Dir       string    `json:"dir,omitempty"`    // the project dir, so /ros:share and /ros:private find this session
+	Retain    string    `json:"retain,omitempty"` // off | ask | auto (the project's §8.3 setting at session start)
 }
 
 var unsafeID = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -267,7 +281,8 @@ func (a *App) sessionStart() int {
 		}
 	}
 	if in.SessionID != "" {
-		_ = saveState(in.SessionID, &sessionState{RunID: s.RunID, ProjectID: s.ProjectID, URL: cfg.URL, OpenedAt: now.UTC()})
+		_ = saveState(in.SessionID, &sessionState{RunID: s.RunID, ProjectID: s.ProjectID, URL: cfg.URL, OpenedAt: now.UTC(),
+			Dir: dir, Retain: s.Retain})
 	}
 
 	if v := a.pluginVersion(); s.MinPluginVersion != "" && versionLess(v, s.MinPluginVersion) {
@@ -304,12 +319,27 @@ func (a *App) sessionStart() int {
 		}
 	}
 
+	notes = append(notes, captureNotes(captureLevel(cfg), s.CaptureLevel)...)
+	if s.CapNotice != "" {
+		notes = append(notes, "ROS: "+s.CapNotice)
+	}
+	switch s.Retain {
+	case "ask":
+		notes = append(notes, "ROS: `/ros:remember-session` saves this session to your own memory")
+	case "auto":
+		notes = append(notes, "ROS: this session's turns are saved to your own memory as you work (secrets removed)")
+	}
+	privPart := ""
+	if s.Visibility == "private" {
+		privPart = " · private session"
+	}
+
 	memPart, recalled := "", 0
 	if s.Recall != nil {
 		recalled = len(s.Recall.ItemIDs)
 		memPart = fmt.Sprintf(" · memory: %s · recalled %d", s.Recall.Profile, recalled)
 	}
-	status := fmt.Sprintf("ROS · project %q%s%s", s.ProjectName, skillsPart, memPart)
+	status := fmt.Sprintf("ROS · project %q%s%s%s", s.ProjectName, skillsPart, memPart, privPart)
 	banner := strings.Join(append([]string{status}, notes...), "\n")
 
 	model := status + "\n" +
@@ -389,6 +419,10 @@ func (a *App) sessionEnd(args []string) int {
 	if in.SessionID == "" || loadState(in.SessionID) == nil {
 		return 0
 	}
+	if st := loadState(in.SessionID); st != nil {
+		_ = appendEvent(st.RunID, spoolEvent{Event: "stop", At: float64(time.Now().UnixNano()) / 1e9,
+			Transcript: in.TranscriptPath}) // closes an open turn; the detached end flushes
+	}
 	if a.Spawn != nil {
 		if err := a.Spawn("hook", "session-end", "--detached", "--session-id", in.SessionID, "--reason", in.Reason); err == nil {
 			return 0
@@ -413,7 +447,9 @@ func (a *App) endSession(sessionID, reason string, budget time.Duration) int {
 	if err != nil {
 		return 0
 	}
-	err = a.client(cfg.URL, token).EndSession(ctx, st.RunID, reason)
+	c := a.client(cfg.URL, token)
+	a.flushRun(ctx, c, st.RunID, captureLevel(cfg)) // late spans are still taken after the end
+	err = c.EndSession(ctx, st.RunID, reason)
 	if err == nil || api.IsStatus(err, 404) || api.IsStatus(err, 409) {
 		_ = os.Remove(statePath(sessionID))
 	}

@@ -63,6 +63,25 @@ Enforced guarantees stay on the ROS devbox.
    Linking writes `.git/ros.json`, creates `.claude/skills/`, and adds the ROS skill paths to
    `.git/info/exclude`.
 
+## Local traces
+
+Every session is traced into ROS (Traces → Local) so you and your team can see what local Claude Code work
+did: turns, tool calls, files touched, model calls and token use (API-equivalent cost).
+
+- The hooks only append to `~/.ros/spool/<run>.jsonl` (no network, a few ms each). `ros-local flush` ships
+  the spool in the background after each turn and at the end of the session; offline spans ship next time.
+- **What is captured is your choice, capped by the project:** `metadata` (default) is names, durations,
+  file paths and token counts only — no prompts, no code. `prompts` adds your prompts and the model's
+  replies; `full` adds tool input/output. `ros-local capture <level>` shows what a level records and asks
+  before raising it. Text is only written to the spool above `metadata`, and ROS scrubs secrets and enforces
+  the project's ceiling. The session banner says when the project allows more than you share.
+- **Session memory (if the project turns it on).** With *Retain from sessions* = ask, `/ros:remember-session`
+  saves this session's turns (what you asked, what Claude answered) to your own ROS memory; with auto, new
+  turns are saved after each one. Secrets are removed on your machine and again by ROS. It only ever writes
+  to your memory, never the project's — ask ROS later "what did I do in payments-api last week?".
+- **Sessions are shared with the project by default.** `/ros:private` makes the current session's trace
+  visible to you only; `/ros:share` shares it again (also on the trace page). Admins can't override it.
+
 ## Every session
 
 ```text

@@ -54,11 +54,17 @@ Usage:
   ros-local sync                                              sync the project's skills now
   ros-local status                                            show sign-in, link and sync state
   ros-local logout                                            forget this device's tokens
+  ros-local capture [metadata|prompts|full]                   what your local traces carry (asks before raising)
+  ros-local share | private                                   this repo's current session: shared or private
+  ros-local remember-session                                  save this repo's current session to your memory
   ros-local version
 
 Called by the plugin (not by hand):
   ros-local mcp-headers --project-dir DIR                     MCP headersHelper
-  ros-local hook session-start | session-end                  Claude Code hooks
+  ros-local hook <event>                                      Claude Code hooks (session-start, session-end,
+                                                              user-prompt-submit, pre-tool-use, post-tool-use,
+                                                              subagent-stop, pre-compact, stop)
+  ros-local flush [--run ID]                                  ship the local trace spool
 `
 
 // Run executes one command and returns the exit code.
@@ -81,6 +87,16 @@ func (a *App) Run(args []string) int {
 		return a.status(rest)
 	case "mcp-headers":
 		return a.mcpHeaders(rest)
+	case "flush":
+		return a.flush(rest)
+	case "capture":
+		return a.capture(rest)
+	case "share":
+		return a.share("project")
+	case "private":
+		return a.share("private")
+	case "remember-session":
+		return a.rememberSession()
 	case "hook":
 		return a.hook(rest)
 	case "version", "--version", "-v":
