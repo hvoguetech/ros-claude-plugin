@@ -333,6 +333,9 @@ func (a *App) sessionStart() int {
 	if s.Visibility == "private" {
 		privPart = " · private session"
 	}
+	if captureLevel(cfg) == "off" || s.CaptureLevel == "off" {
+		privPart += " · traces off"
+	}
 
 	memPart, recalled := "", 0
 	if s.Recall != nil {

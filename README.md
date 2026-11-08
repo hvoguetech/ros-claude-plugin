@@ -70,6 +70,8 @@ did: turns, tool calls, files touched, model calls and token use (API-equivalent
 
 - The hooks only append to `~/.ros/spool/<run>.jsonl` (no network, a few ms each). `ros-local flush` ships
   the spool in the background after each turn and at the end of the session; offline spans ship next time.
+- **Turn it off:** `ros-local capture off` — nothing about your sessions leaves the machine; ROS memory, skills
+  and tools keep working. The banner shows `traces off`. `ros-local capture metadata` turns it back on.
 - **What is captured is your choice, capped by the project:** `metadata` (default) is names, durations,
   file paths and token counts only — no prompts, no code. `prompts` adds your prompts and the model's
   replies; `full` adds tool input/output. `ros-local capture <level>` shows what a level records and asks
