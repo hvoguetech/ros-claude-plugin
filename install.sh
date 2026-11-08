@@ -58,7 +58,7 @@ archive="ros-local_${version}_${os}_${arch}.tar.gz"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "Downloading ros-local $version for $os/$arch…"
+say "Downloading ros-local $version for $os/${arch}..."
 curl -fsSL -o "$tmp/$archive" "$BASE/v$version/$archive" || die "download failed: $BASE/v$version/$archive"
 curl -fsSL -o "$tmp/checksums.txt" "$BASE/v$version/checksums.txt" || die "could not download checksums.txt"
 
