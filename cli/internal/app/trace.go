@@ -56,7 +56,7 @@ var traceEvents = map[string]string{
 }
 
 func captureLevel(cfg *config.Config) string {
-	if cfg != nil && (cfg.CaptureLevel == "prompts" || cfg.CaptureLevel == "full") {
+	if cfg != nil && (cfg.CaptureLevel == "off" || cfg.CaptureLevel == "prompts" || cfg.CaptureLevel == "full") {
 		return cfg.CaptureLevel
 	}
 	return "metadata"
@@ -114,6 +114,9 @@ func (a *App) traceHook(event string) int {
 	}
 	cfg, _ := config.Load()
 	level := captureLevel(cfg)
+	if level == "off" && !(event == "stop" && st.Retain == "auto") {
+		return 0 // traces off: nothing spooled (a Stop still carries the transcript for session memory)
+	}
 	text := levelAbove(level)
 	full := level == "full"
 	ev := spoolEvent{Event: event, At: float64(time.Now().UnixNano()) / 1e9}
@@ -455,6 +458,9 @@ func (a *App) flushRun(ctx context.Context, c *api.Client, runID, level string) 
 		if last.Retain == "auto" && last.Transcript != "" {
 			_, _ = retainTurns(ctx, c, runID, last.Transcript, false)
 		}
+	}
+	if level == "off" {
+		return // traces off: the spool only carried what session memory needs
 	}
 	sent := readSent(runID)
 	var todo []api.Span

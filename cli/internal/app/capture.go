@@ -17,9 +17,10 @@ import (
 	"github.com/hvoguetech/ros-claude-plugin/cli/internal/config"
 )
 
-var levelRank = map[string]int{"metadata": 0, "prompts": 1, "full": 2}
+var levelRank = map[string]int{"off": -1, "metadata": 0, "prompts": 1, "full": 2}
 
 var levelText = map[string]string{
+	"off":      "nothing — no trace of your sessions leaves this machine (ROS memory, skills and tools still work)",
 	"metadata": "tool names, durations, file paths, model and token counts — no prompts, no code, no outputs",
 	"prompts":  "metadata, plus your prompts and Claude's replies (secrets scrubbed)",
 	"full":     "prompts, plus tool inputs and outputs — code, commands and their results (secrets scrubbed, clipped)",
@@ -32,6 +33,10 @@ func captureNotes(mine, ceiling string) []string {
 		return nil
 	}
 	switch {
+	case ceiling == "off":
+		return []string{"ROS: this project doesn't collect local traces"}
+	case mine == "off":
+		return nil // the developer's own choice; `ros-local capture` shows it
 	case levelRank[ceiling] > levelRank[mine]:
 		return []string{fmt.Sprintf("ROS: traces share %s; this project allows %s — `ros-local capture %s` to share more",
 			mine, ceiling, ceiling)}
@@ -54,13 +59,13 @@ func (a *App) capture(args []string) int {
 	}
 	cur := captureLevel(cfg)
 	if fs.NArg() == 0 {
-		fmt.Fprintf(a.Stdout, "Local traces share: %s (%s).\nLevels: metadata | prompts | full — `ros-local capture <level>`.\n",
+		fmt.Fprintf(a.Stdout, "Local traces share: %s (%s).\nLevels: off | metadata | prompts | full — `ros-local capture <level>`.\n",
 			cur, levelText[cur])
 		return 0
 	}
 	want := fs.Arg(0)
 	if _, ok := levelRank[want]; !ok {
-		return a.errorf("capture: %q isn't a level (metadata | prompts | full)", want)
+		return a.errorf("capture: %q isn't a level (off | metadata | prompts | full)", want)
 	}
 	if levelRank[want] > levelRank[cur] && !*yes {
 		fmt.Fprintf(a.Stdout, "Raise local traces from %s to %s?\nThey'll carry: %s.\nVisible to your project "+

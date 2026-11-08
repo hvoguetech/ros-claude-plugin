@@ -231,3 +231,40 @@ func TestTheBannerSaysWhenTheTeamCapIsReached(t *testing.T) {
 		t.Fatalf("banner: %s", banner)
 	}
 }
+
+func TestCaptureOffSpoolsNothingAndSendsNothing(t *testing.T) {
+	h := newHarness(t)
+	h.signIn(time.Hour)
+	if code, _, _ := h.run("", "capture", "off"); code != 0 { // lowering never asks
+		t.Fatal("capture off failed")
+	}
+	_, out, _ := h.run(`{"session_id":"o1"}`, "hook", "session-start")
+	if banner := decodeHook(t, out).SystemMessage; !strings.Contains(banner, "· traces off") {
+		t.Fatalf("banner: %s", banner)
+	}
+	h.run(hookJSON(map[string]any{"session_id": "o1", "prompt": "secret plans"}), "hook", "user-prompt-submit")
+	h.run(hookJSON(map[string]any{"session_id": "o1", "tool_name": "Edit", "tool_use_id": "t",
+		"tool_input": map[string]any{"file_path": "a.go"}}), "hook", "pre-tool-use")
+	h.run(hookJSON(map[string]any{"session_id": "o1", "transcript_path": writeTranscript(t, time.Now())}), "hook", "stop")
+	if _, err := os.Stat(spoolPath("run-1")); !os.IsNotExist(err) {
+		t.Fatal("traces off, yet a spool was written")
+	}
+	if len(h.spawns) != 0 {
+		t.Fatalf("traces off, yet a flush was spawned: %v", h.spawns)
+	}
+	h.run("", "flush")
+	if len(h.srv.Spans) != 0 {
+		t.Fatalf("traces off, yet spans were sent: %v", h.srv.Spans)
+	}
+}
+
+func TestAProjectThatCollectsNoTracesSaysSo(t *testing.T) {
+	h := newHarness(t)
+	h.srv.CaptureCeiling = "off"
+	h.signIn(time.Hour)
+	_, out, _ := h.run(`{"session_id":"o2"}`, "hook", "session-start")
+	banner := decodeHook(t, out).SystemMessage
+	if !strings.Contains(banner, "doesn't collect local traces") || !strings.Contains(banner, "· traces off") {
+		t.Fatalf("banner: %s", banner)
+	}
+}
