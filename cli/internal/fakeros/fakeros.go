@@ -80,6 +80,12 @@ type Server struct {
 	issued         int
 	validTokens    map[string]bool
 	RefreshTokenID string
+
+	// pick up / send (routers/local_pickup.py)
+	Pickups     map[string]map[string]any // run id → GET /v1/local/runs/{id}/pickup body
+	Artifacts   map[string][]byte         // artifact id → bytes
+	PickupMarks []map[string]any          // POST /v1/local/runs/{id}/pickup bodies (+ "run_id")
+	Tasks       []map[string]any          // POST /v1/local/tasks bodies
 }
 
 // New starts a fake with one project and an empty skill set.
@@ -91,6 +97,7 @@ func New() *Server {
 		validTokens:  map[string]bool{},
 		spentRefresh: map[string]bool{}, liveRefresh: map[string]bool{"refresh-1": true},
 		UnavailableProjects: map[string]string{},
+		Pickups: map[string]map[string]any{}, Artifacts: map[string][]byte{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/oauth/device_authorization", s.deviceAuthorization)
@@ -103,6 +110,10 @@ func New() *Server {
 	mux.HandleFunc("POST /v1/local/sessions/{id}/retain", s.auth(s.retain))
 	mux.HandleFunc("GET /v1/local/skills/manifest", s.auth(s.manifest))
 	mux.HandleFunc("GET /v1/local/skills/bundle", s.auth(s.bundle))
+	mux.HandleFunc("GET /v1/local/runs/{id}/pickup", s.auth(s.pickup))
+	mux.HandleFunc("POST /v1/local/runs/{id}/pickup", s.auth(s.markPickup))
+	mux.HandleFunc("GET /v1/local/artifacts/{id}", s.auth(s.artifact))
+	mux.HandleFunc("POST /v1/local/tasks", s.auth(s.createTask))
 	s.Server = httptest.NewServer(mux)
 	return s
 }
@@ -489,4 +500,72 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// --- pick up / send ------------------------------------------------------------------------------------
+
+func (s *Server) pickup(w http.ResponseWriter, r *http.Request) {
+	s.Mu.Lock()
+	body, ok := s.Pickups[r.PathValue("id")]
+	s.Mu.Unlock()
+	if !ok {
+		writeJSON(w, 404, map[string]string{"detail": "run " + r.PathValue("id") + " not found"})
+		return
+	}
+	writeJSON(w, 200, body)
+}
+
+func (s *Server) markPickup(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body == nil {
+		body = map[string]any{}
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if _, ok := s.Pickups[r.PathValue("id")]; !ok {
+		writeJSON(w, 404, map[string]string{"detail": "run not found"})
+		return
+	}
+	body["run_id"] = r.PathValue("id")
+	s.PickupMarks = append(s.PickupMarks, body)
+	writeJSON(w, 200, map[string]any{"run_id": r.PathValue("id"), "status": "interrupted", "driver_id": "u1",
+		"picked_up_at": time.Now().UTC().Format(time.RFC3339), "took_over": false})
+}
+
+func (s *Server) artifact(w http.ResponseWriter, r *http.Request) {
+	s.Mu.Lock()
+	data, ok := s.Artifacts[r.PathValue("id")]
+	s.Mu.Unlock()
+	if !ok {
+		writeJSON(w, 404, map[string]string{"detail": "artifact not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="workspace.tar.gz"`)
+	w.WriteHeader(200)
+	_, _ = w.Write(data)
+}
+
+func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["message"] == "" {
+		writeJSON(w, 422, map[string]string{"detail": "message required"})
+		return
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	pid, _ := body["project_id"].(string)
+	if pid == "" {
+		if s.NoProject {
+			writeJSON(w, 404, map[string]any{"error": "no_project", "detail": "No project"})
+			return
+		}
+		pid = s.ProjectID
+	}
+	s.Tasks = append(s.Tasks, body)
+	id := fmt.Sprintf("t%d", len(s.Tasks))
+	title, _ := body["title"].(string)
+	writeJSON(w, 201, map[string]any{"task_id": id, "project_id": pid, "status": "queued", "title": title,
+		"url": s.URL + "/?project=" + pid + "&screen=tasks&task=" + id})
 }

@@ -107,6 +107,36 @@ directories it lists in `.claude/skills/.ros-manifest.json`. Your own skills are
 edit a synced skill, the next sync warns you. When ROS publishes a new version, your edited copy is moved
 to `.claude/skills/.ros-backup/` before it is replaced.
 
+## Pick a cloud run up, or send your work to the cloud
+
+**Cloud → laptop.** In ROS, open a run (My agents → Pick up, or the Live runs page) and copy the one-liner, or
+pass the run's console URL:
+
+```bash
+ros-local pickup <run id>          # or: ros-local pickup "https://…&run=<id>"
+```
+
+It fetches the conversation's latest workspace snapshot (its files and repository working trees), unpacks it into
+`~/ros/<run folder>` (`--dir` for elsewhere; a non-empty directory is refused unless `--force`), writes the briefing —
+what the run was asked, what it is waiting on, its last report, the repositories and pull requests — to
+`ROS-PICKUP.md`, records on the run that you picked it up (while the run is still live you become its driver, so its
+questions come to you), and starts Claude Code in that directory with the briefing as the first message. The ros plugin
+then gives that session the project's memory and skills as usual. `--no-claude` stops before starting Claude Code.
+Archives are unpacked defensively: entries that would land outside the directory are refused.
+
+**Laptop → cloud.** From a linked repository:
+
+```bash
+ros-local send --message "Goal … Done … Remaining … Gotchas …"
+```
+
+or `/ros:send [instruction]` inside Claude Code, which writes the hand-off note from the session and runs the same
+command. Uncommitted changes are committed on a new `ros/handoff-<time>` branch (`--branch` to name it), the branch is
+pushed with your own git credentials, and a task is created on the repo's ROS project with the branch and your note; the
+agent continues from that branch on the warm devbox and its questions and result land in your ROS inbox. `--no-push`
+skips the commit and push when the branch is already on the remote. Needs the `tasks:write` scope (granted at sign-in)
+and the right to create tasks in the project.
+
 ## `ros-local` commands
 
 | Command | What it does |
@@ -116,6 +146,8 @@ to `.claude/skills/.ros-backup/` before it is replaced.
 | `ros-local sync` | Sync the project's skills into this repo. |
 | `ros-local status` | Show sign-in, link and sync state. |
 | `ros-local logout` | Forget this device's tokens. To revoke the device everywhere, use Settings → Devices in ROS. |
+| `ros-local pickup <run id or console URL> [--dir DIR] [--no-claude] [--force]` | Continue a cloud run on this machine: unpack its workspace snapshot (or clone its repositories) into `~/ros/<run folder>`, save the briefing as `ROS-PICKUP.md`, record the pickup on the run, and start Claude Code there with the briefing as the first message. |
+| `ros-local send --message "…" [--title T] [--branch B] [--no-push] [--project ID]` | Hand this repo's work to a cloud agent: commits uncommitted changes on a new `ros/handoff-<time>` branch, pushes it with your git credentials, and creates a task on the repo's ROS project with your note. `/ros:send` in Claude Code writes the note for you. |
 | `ros-local mcp-headers --project-dir DIR` | Used by the plugin: prints the MCP auth and project headers. |
 | `ros-local hook session-start` / `session-end` | Used by the plugin's hooks. |
 
