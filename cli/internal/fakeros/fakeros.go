@@ -102,7 +102,7 @@ func New() *Server {
 		validTokens:  map[string]bool{},
 		spentRefresh: map[string]bool{}, liveRefresh: map[string]bool{"refresh-1": true},
 		UnavailableProjects: map[string]string{},
-		Pickups: map[string]map[string]any{}, Artifacts: map[string][]byte{},
+		Pickups:             map[string]map[string]any{}, Artifacts: map[string][]byte{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/oauth/device_authorization", s.deviceAuthorization)
