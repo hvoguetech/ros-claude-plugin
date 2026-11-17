@@ -44,6 +44,10 @@ const (
 	CodeProjectUnavailable = "project_unavailable"
 	// CodeNoProject: no project was named and none resolves for the caller (404).
 	CodeNoProject = "no_project"
+	// CodeModelAccessOwn: the project uses the developer's own model login, not the model gateway (403).
+	CodeModelAccessOwn = "model_access_own"
+	// CodeNoProviderKey: the project has no usable provider key for the model gateway (409).
+	CodeNoProviderKey = "no_provider_key"
 )
 
 // Error is a non-2xx answer. Code is the machine-readable error (an OAuth `error`, or a structured
@@ -637,6 +641,35 @@ type TaskResult struct {
 func (c *Client) CreateTask(ctx context.Context, in *TaskRequest) (*TaskResult, error) {
 	var out TaskResult
 	if err := c.postJSON(ctx, "/v1/local/tasks", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// --- model gateway ------------------------------------------------------------------------------------
+
+// ModelToken is the answer to POST /v1/local/model-token: a short-lived credential for ROS's model gateway
+// and where the harness sends its model requests. The project's provider key stays on the server.
+type ModelToken struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	BaseURL   string    `json:"base_url"`
+	Provider  string    `json:"provider"`
+	Models    []string  `json:"models"` // the project's allowed models; empty = any
+	ProjectID string    `json:"project_id"`
+}
+
+// ModelToken asks for a model token for a project (explicit id, else the repo's remote, else the device's project).
+func (c *Client) ModelToken(ctx context.Context, projectID, repo string) (*ModelToken, error) {
+	in := map[string]string{}
+	if projectID != "" {
+		in["project_id"] = projectID
+	}
+	if repo != "" {
+		in["repo"] = repo
+	}
+	var out ModelToken
+	if err := c.postJSON(ctx, "/v1/local/model-token", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

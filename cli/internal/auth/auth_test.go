@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -114,6 +115,39 @@ func TestLoginDeviceFlow(t *testing.T) {
 	creds, err := s.Store.Get(s.Config.URL)
 	if err != nil || creds.RefreshToken != "refresh-1" || creds.AccessToken != tok.AccessToken {
 		t.Fatalf("creds %+v err %v", creds, err)
+	}
+}
+
+// dropOnce fails the first token poll with a transport error (what a server closing an idle connection looks like).
+type dropOnce struct {
+	next    http.RoundTripper
+	dropped bool
+}
+
+func (d *dropOnce) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !d.dropped && r.URL.Path == "/v1/oauth/token" {
+		d.dropped = true
+		return nil, io.EOF
+	}
+	return d.next.RoundTrip(r)
+}
+
+// A poll that gets no answer at all is not a refusal: the lab API closes idle connections at the polling
+// interval, and `ros-local login` died with "EOF" while the developer was approving.
+func TestLoginKeepsPollingAfterADroppedConnection(t *testing.T) {
+	srv := fakeros.New()
+	defer srv.Close()
+	s := newSession(t, srv)
+	drop := &dropOnce{next: http.DefaultTransport}
+	s.NewClient = func(base, token string) *api.Client {
+		c := api.New(base, token, "test", 5*time.Second)
+		c.HTTP.Transport = drop
+		return c
+	}
+	tok, err := s.Login(context.Background(), LoginOptions{Out: io.Discard, DeviceName: "laptop",
+		Sleep: func(context.Context, time.Duration) error { return nil }})
+	if err != nil || !drop.dropped || tok.DeviceID != "dev1" {
+		t.Fatalf("tok %+v err %v dropped %v", tok, err, drop.dropped)
 	}
 }
 

@@ -37,6 +37,8 @@ type App struct {
 	LoginSleep func(ctx context.Context, d time.Duration) error
 	// Exec replaces this process with a program in a directory (`pickup` starting Claude Code); nil = the real exec.
 	Exec func(dir string, argv []string) error
+	// Executable is this binary's path, written into Claude Code's apiKeyHelper; nil = "ros-local" on PATH.
+	Executable func() (string, error)
 }
 
 // New returns the App for the real process.
@@ -44,7 +46,7 @@ func New(version string) *App {
 	return &App{
 		Version: version, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 		Getenv: os.Getenv, Getwd: os.Getwd, HTTPTimeout: 8 * time.Second,
-		OpenBrowser: openBrowser, Spawn: spawnDetached,
+		OpenBrowser: openBrowser, Spawn: spawnDetached, Executable: os.Executable,
 	}
 }
 
@@ -61,10 +63,13 @@ Usage:
   ros-local remember-session                                  save this repo's current session to your memory
   ros-local pickup <run id or URL> [--dir DIR] [--no-claude]  continue a cloud run here: unpack its files, start Claude Code
   ros-local send --message "…" [--branch B] [--no-push]       hand this repo's work to a cloud agent as a task
+  ros-local gateway [setup|off|status] [--global]             call models through ROS: the project's key pays and
+                                                              never reaches this machine
   ros-local version
 
 Called by the plugin (not by hand):
   ros-local mcp-headers --project-dir DIR                     MCP headersHelper
+  ros-local model-token [--project-dir DIR]                   Claude Code apiKeyHelper (set by gateway setup)
   ros-local hook <event>                                      Claude Code hooks (session-start, session-end,
                                                               user-prompt-submit, pre-tool-use, post-tool-use,
                                                               subagent-stop, pre-compact, stop)
@@ -95,6 +100,10 @@ func (a *App) Run(args []string) int {
 		return a.send(rest)
 	case "mcp-headers":
 		return a.mcpHeaders(rest)
+	case "model-token":
+		return a.modelToken(rest)
+	case "gateway":
+		return a.gateway(rest)
 	case "flush":
 		return a.flush(rest)
 	case "capture":
