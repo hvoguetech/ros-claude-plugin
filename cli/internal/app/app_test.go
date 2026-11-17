@@ -57,7 +57,12 @@ func (h *harness) run(stdin string, args ...string) (int, string, string) {
 		Getenv: func(k string) string { return h.env[k] }, Getwd: func() (string, error) { return h.repo, nil },
 		HTTPTimeout: 5 * time.Second,
 		Spawn:       func(args ...string) error { h.spawns = append(h.spawns, args); return nil },
-		Exec:        func(dir string, argv []string) error { if h.exec != nil { return h.exec(dir, argv) }; return nil }}
+		Exec: func(dir string, argv []string) error {
+			if h.exec != nil {
+				return h.exec(dir, argv)
+			}
+			return nil
+		}}
 	code := a.Run(args)
 	return code, out.String(), errb.String()
 }
