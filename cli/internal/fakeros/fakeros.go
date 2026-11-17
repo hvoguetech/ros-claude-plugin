@@ -86,6 +86,11 @@ type Server struct {
 	Artifacts   map[string][]byte         // artifact id → bytes
 	PickupMarks []map[string]any          // POST /v1/local/runs/{id}/pickup bodies (+ "run_id")
 	Tasks       []map[string]any          // POST /v1/local/tasks bodies
+
+	// model gateway (POST /v1/local/model-token)
+	ModelTokenError  string           // "" = succeed; model_access_own | no_provider_key | insufficient_scope
+	ModelTokenBodies []map[string]any // bodies received
+	GatewayModels    []string
 }
 
 // New starts a fake with one project and an empty skill set.
@@ -114,6 +119,7 @@ func New() *Server {
 	mux.HandleFunc("POST /v1/local/runs/{id}/pickup", s.auth(s.markPickup))
 	mux.HandleFunc("GET /v1/local/artifacts/{id}", s.auth(s.artifact))
 	mux.HandleFunc("POST /v1/local/tasks", s.auth(s.createTask))
+	mux.HandleFunc("POST /v1/local/model-token", s.auth(s.modelToken))
 	s.Server = httptest.NewServer(mux)
 	return s
 }
@@ -568,4 +574,27 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	title, _ := body["title"].(string)
 	writeJSON(w, 201, map[string]any{"task_id": id, "project_id": pid, "status": "queued", "title": title,
 		"url": s.URL + "/?project=" + pid + "&screen=tasks&task=" + id})
+}
+
+func (s *Server) modelToken(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	s.Mu.Lock()
+	s.ModelTokenBodies = append(s.ModelTokenBodies, body)
+	fail, models := s.ModelTokenError, s.GatewayModels
+	s.Mu.Unlock()
+	switch fail {
+	case "model_access_own":
+		structured(w, 403, fail, "", "Project 'Payments' uses your own model login, not Agent Studio's model gateway.")
+		return
+	case "no_provider_key":
+		structured(w, 409, fail, "", "Project 'Payments' has no usable Anthropic API key. Add one in Settings → API keys.")
+		return
+	case "insufficient_scope":
+		writeJSON(w, 403, map[string]string{"detail": "insufficient_scope: requires models:invoke"})
+		return
+	}
+	pid, _ := body["project_id"].(string)
+	writeJSON(w, 200, map[string]any{"token": "model-token-1", "expires_at": time.Now().Add(10 * time.Minute).UTC(),
+		"base_url": s.URL + "/model-gateway", "provider": "anthropic", "models": models, "project_id": firstOr(pid, s.ProjectID)})
 }

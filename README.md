@@ -137,6 +137,26 @@ agent continues from that branch on the warm devbox and its questions and result
 skips the commit and push when the branch is already on the remote. Needs the `tasks:write` scope (granted at sign-in)
 and the right to create tasks in the project.
 
+## Use the project's model key (model gateway)
+
+By default Claude Code uses your own model login. When a project admin sets **Settings → Local agent → Model
+access** to *Through ROS*, Claude Code can call the model through ROS instead: the project's API key pays, and the
+key never reaches your machine. Your machine only ever holds a token that lasts ten minutes.
+
+```bash
+cd your-repo                 # a repo linked to that project (ros-local link)
+ros-local gateway setup      # writes .claude/settings.local.json for this repo (kept out of git)
+claude                       # /status shows the gateway
+ros-local gateway off        # back to your own login
+```
+
+`gateway setup` sets Claude Code's `apiKeyHelper` to `ros-local model-token` and `ANTHROPIC_BASE_URL` to ROS's
+gateway, after checking with ROS that the project allows it. `--global` does the same for every session on this
+machine (`~/.claude/settings.json`). While it is on, your saved Claude login isn't used for those sessions, and
+Remote Control and voice dictation are unavailable (they need that login). Spend counts toward the project and the
+team's cap; ROS can restrict which models are allowed. If you signed this device in before model access existed,
+run `ros-local login` again.
+
 ## `ros-local` commands
 
 | Command | What it does |
@@ -148,7 +168,9 @@ and the right to create tasks in the project.
 | `ros-local logout` | Forget this device's tokens. To revoke the device everywhere, use Settings → Devices in ROS. |
 | `ros-local pickup <run id or console URL> [--dir DIR] [--no-claude] [--force]` | Continue a cloud run on this machine: unpack its workspace snapshot (or clone its repositories) into `~/ros/<run folder>`, save the briefing as `ROS-PICKUP.md`, record the pickup on the run, and start Claude Code there with the briefing as the first message. |
 | `ros-local send --message "…" [--title T] [--branch B] [--no-push] [--project ID]` | Hand this repo's work to a cloud agent: commits uncommitted changes on a new `ros/handoff-<time>` branch, pushes it with your git credentials, and creates a task on the repo's ROS project with your note. `/ros:send` in Claude Code writes the note for you. |
+| `ros-local gateway [setup\|off\|status] [--global] [--force]` | Call models through ROS with the project's key (see above). `setup` refuses to replace an `apiKeyHelper` it didn't write unless `--force`; `off` only removes what `setup` wrote. |
 | `ros-local mcp-headers --project-dir DIR` | Used by the plugin: prints the MCP auth and project headers. |
+| `ros-local model-token [--project-dir DIR]` | Used by Claude Code (`apiKeyHelper`): prints a short-lived model token and nothing else. |
 | `ros-local hook session-start` / `session-end` | Used by the plugin's hooks. |
 
 State lives in `~/.ros/` (override with `ROS_HOME`).

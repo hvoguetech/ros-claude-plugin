@@ -215,7 +215,12 @@ func (s *Session) Login(ctx context.Context, o LoginOptions) (*api.Token, error)
 		case "expired_token":
 			return nil, errors.New("the code expired before it was approved; run `ros-local login` again")
 		default:
-			return nil, fmt.Errorf("signing in: %w", err)
+			// No answer at all (a dropped or reset connection) is not a refusal: keep polling. A server that
+			// closes idle connections at the polling interval made every sign-in a coin toss otherwise.
+			var apiErr *api.Error
+			if errors.As(err, &apiErr) {
+				return nil, fmt.Errorf("signing in: %w", err)
+			}
 		}
 		if Now().After(deadline) {
 			return nil, errors.New("the code expired before it was approved; run `ros-local login` again")
