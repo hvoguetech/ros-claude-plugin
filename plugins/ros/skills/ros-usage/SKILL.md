@@ -1,6 +1,6 @@
 ---
 name: ros-usage
-description: How to use ROS (the team's agent platform) from this session — its recalled memory, the ros MCP tools (recall_memory, remember, ask_team_memory, recall_knowledge, search_knowledge_base, search_past_runs) and the synced ros-* skills. Use when the user mentions ROS, team or project memory, past runs, or asks you to remember something for later.
+description: How to use ROS (the team's agent platform) from this session — its recalled memory, the ros MCP tools (recall_memory, remember, ask_team_memory, recall_knowledge, search_knowledge_base, search_past_runs, and list_agents_and_workflows / run to use the team's agents and workflows) and the synced ros-* skills. Use when the user mentions ROS, team or project memory, past runs, a team agent or workflow they want run, or asks you to remember something for later.
 ---
 
 # Using ROS in a local session
@@ -31,6 +31,27 @@ the synced skills.
 | `search_past_chats(query)` | Find earlier ROS chats about a topic. |
 | `memory_view`, `memory_append` | Read or add to the user's personal memory blocks. |
 | `remember(text, scope)` | Save a durable fact. `scope="me"` (default) saves to the user's own memory. `scope="project"` only *proposes* a project fact; a project admin reviews it before anyone else sees it. |
+
+## Running the team's agents and workflows
+
+| Tool | Use it to |
+|---|---|
+| `list_agents_and_workflows(query?)` | See which ROS agents and workflows the user may run in this project, what each does and the inputs it declares. |
+| `run(target, message, inputs?, wait_seconds?, thread_id?)` | Run one (by name or id) as the user and get back its answer and the files it produced. |
+| `run_result(run_id, wait_seconds?)` | Get the result of a run that was still going, waiting again. |
+
+- **It runs in ROS, not here.** The agent can't see this session or the local files. Put everything it needs in
+  `message` (paste the text it should work on) and in the declared `inputs`.
+- **It costs what a run from the ROS console costs**, on the project's budget. Run something when the user asks
+  for it or it is clearly what they want; don't call a team agent for work you can do yourself.
+- **Long runs.** `run` waits up to about 50 seconds. A result with `status: "running"` or `"queued"` carries a
+  `run_id`: call `run_result` until it is `done`, and tell the user it is still going if it takes several calls.
+- **`waiting_for_person`** means the run stopped to ask someone (the `question`). The user answers it in their ROS
+  inbox (`answer_at`); then call `run_result` again.
+- **Files** come back by name, with their text inline when small. They live in ROS; write one to the local repo
+  only if the user wants a copy.
+- **Follow-ups.** Pass the result's `thread_id` to `run` to continue the same conversation with that target.
+- Show the user the `trace_url` when they want to see what the run did.
 
 Guidelines:
 

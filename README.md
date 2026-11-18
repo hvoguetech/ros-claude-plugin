@@ -6,6 +6,11 @@ sessions to ROS:
 - **Memory.** Each session starts with what ROS remembers about you, the project and this repo. The
   `ros` MCP tools (`recall_memory`, `remember`, `ask_team_memory`, `search_knowledge_base`,
   `search_past_runs`) are available throughout the session.
+- **Agents and workflows.** Ask Claude Code to run one of your team's ROS agents or workflows ("run the PRD
+  review workflow on this file", "ask the release agent for the changelog"): it runs in ROS as you, and the
+  answer and the files it produced come back into the session (`list_agents_and_workflows`, `run`,
+  `run_result`). Needs the `runs:start` permission: run `ros-local login` again if you signed in before
+  2026-11-18.
 - **Skills.** The project's approved skills are synced into `.claude/skills/ros-*` in the repo. They are
   git-excluded and never committed.
 - **Identity.** Sign-in uses a device code. The refresh token stays in your OS keychain. Connector
